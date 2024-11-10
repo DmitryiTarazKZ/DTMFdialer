@@ -1,0 +1,8 @@
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityFeedbackType="feedbackSpoken"
+    android:canRequestTouchExplorationMode="true"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/accessibility_service_description"
+    android:label="@string/accessibility_service_name"
+    android:notificationTimeout="100"
+    android:settingsActivity="com.mcal.dtmf.MainActivity" />
