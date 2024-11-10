@@ -113,6 +113,7 @@ class MainRepositoryImpl(
     private var sim = 0
     private var volumeLevel = 70
     private var flagLevel = false
+    private var flagVoise = false
     private var slotSim1: String? = null
     private var slotSim2: String? = null
     private var barometerSensor: Sensor? = null
@@ -380,12 +381,6 @@ class MainRepositoryImpl(
             delayTon1000hz {
                 speakText("Текущее время $timeString")
             }
-            if (getConnType() == "Репитер (2 Канала)") {
-                delay(10000)
-                if (!preferencesRepository.getDtmModule()) {
-                    stopDtmf()
-                } else setFlashlight(false)
-            }
         }
     }
 
@@ -447,10 +442,6 @@ class MainRepositoryImpl(
                 // При подключенных наушниках и старте системы включить режим "Не беспокоить"
                 if (getIsConnect()) {
                     notificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_PRIORITY)
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(context, "Звук направлен в наушники", Toast.LENGTH_SHORT)
-                            .show()
-                    }
                 } else {
                     // При отключенных наушниках и старте системы отключить режим "Не беспокоить"
                     notificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL)
@@ -464,11 +455,6 @@ class MainRepositoryImpl(
                     } else {
                         // В режиме супертелефон и старте системы включить режим "Не беспокоить"
                         notificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_PRIORITY)
-                    }
-
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(context, "Звук направлен в динамик", Toast.LENGTH_SHORT)
-                            .show()
                     }
                 }
 
@@ -919,7 +905,7 @@ class MainRepositoryImpl(
                 else -> MediaRecorder.AudioSource.DEFAULT
             }
         }
-        runCatching {
+        runCatching { // Обработка исключения для предотвращения падения
             audioRecord = AudioRecord(
                 soundSource,
                 sampleRate,
@@ -967,7 +953,10 @@ class MainRepositoryImpl(
                 audio.stop()
             }
         }.onFailure {
-            // вывести сообщение
+            withContext(Dispatchers.Main) {
+                Toast.makeText(context, "Источник звука не доступен", Toast.LENGTH_SHORT)
+                    .show()
+            }
         }
     }
 
@@ -1013,11 +1002,6 @@ class MainRepositoryImpl(
     //Основной блок обработки нажатий клавиш
 
     override fun clickKey(input: String, key: Char?) {
-//        val validInputs = setOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "А", "B", "C", "D")
-//        if (input in validInputs && preferencesRepository.getDtmModule()) {
-//            Log.d("Контрольный лог", "СРАБОТАЛО ТРЕТЬЕ УСЛОВИЕ")
-//            setFlashlight(true)
-//        }
 
         // Регулировка громкости в режиме супертелефон
         if (input == "A" && getConnType() == "Супертелефон") {
@@ -1131,9 +1115,13 @@ class MainRepositoryImpl(
                             setInput(numberA)
                             val callerName = getContactNameByNumber(numberA)
                             if (callerName.isNullOrEmpty()) {
-                                delayTon1000hz { speakText("Будет выполнен вызов абонента с неизвестным номером") }
+                                delayTon1000hz { speakText("Будет выполнен вызов абонента с неизвестным номером")
+                                    flagVoise = true
+                                }
                             } else {
-                                delayTon1000hz { speakText("Номер абонента $callerName набран") }
+                                delayTon1000hz { speakText("Номер абонента $callerName набран")
+                                    flagVoise = true
+                                }
                             }
                             delay(6000)
                             DtmfService.callStart(context)
@@ -1200,9 +1188,13 @@ class MainRepositoryImpl(
                             setInput(numberB)
                             val callerName = getContactNameByNumber(numberB)
                             if (callerName.isNullOrEmpty()) {
-                                delayTon1000hz { speakText("Будет выполнен вызов абонента с неизвестным номером") }
+                                delayTon1000hz { speakText("Будет выполнен вызов абонента с неизвестным номером")
+                                    flagVoise = true
+                                }
                             } else {
-                                delayTon1000hz { speakText("Номер абонента $callerName набран") }
+                                delayTon1000hz { speakText("Номер абонента $callerName набран")
+                                    flagVoise = true
+                                }
                             }
                             delay(6000)
                             DtmfService.callStart(context)
@@ -1269,9 +1261,13 @@ class MainRepositoryImpl(
                             setInput(numberC)
                             val callerName = getContactNameByNumber(numberC)
                             if (callerName.isNullOrEmpty()) {
-                                delayTon1000hz { speakText("Будет выполнен вызов абонента с неизвестным номером") }
+                                delayTon1000hz { speakText("Будет выполнен вызов абонента с неизвестным номером")
+                                    flagVoise = true
+                                }
                             } else {
-                                delayTon1000hz { speakText("Номер абонента $callerName набран") }
+                                delayTon1000hz { speakText("Номер абонента $callerName набран")
+                                    flagVoise = true
+                                }
                             }
                             delay(6000)
                             DtmfService.callStart(context)
@@ -1338,9 +1334,13 @@ class MainRepositoryImpl(
                             setInput(numberD)
                             val callerName = getContactNameByNumber(numberD)
                             if (callerName.isNullOrEmpty()) {
-                                delayTon1000hz { speakText("Будет выполнен вызов абонента с неизвестным номером") }
+                                delayTon1000hz { speakText("Будет выполнен вызов абонента с неизвестным номером")
+                                    flagVoise = true
+                                }
                             } else {
-                                delayTon1000hz { speakText("Номер абонента $callerName набран") }
+                                delayTon1000hz { speakText("Номер абонента $callerName набран")
+                                    flagVoise = true
+                                }
                             }
                             delay(6000)
                             DtmfService.callStart(context)
@@ -1359,6 +1359,7 @@ class MainRepositoryImpl(
 
                 if (input == "") {
                     playMediaPlayer((MediaPlayer.create(context, R.raw.dial_the_number)), true)
+                    flagVoise = false
                 }
 
                 if (getCall() != null) {
@@ -1396,20 +1397,16 @@ class MainRepositoryImpl(
                         delayTon1000hz {
                             speakText("Температура аккумулятора $temperatureText. Заряд аккумулятора $levelText")
                         }
-                        if (getConnType() == "Репитер (2 Канала)") {
-                            delay(10000)
-                            if (!preferencesRepository.getDtmModule()) {
-                                stopDtmf()
-                            } else setFlashlight(false)
-                        }
                     }
                     setInput("")
+                    flagVoise = false
                 }
 
                 // Удаленное сообщение о текущем времени
                 else if (input == "2") {
                     speakCurrentTime()
                     setInput("")
+                    flagVoise = false
                 }
 
                 // Удаленный контроль уровня сети по команде 3*
@@ -1467,12 +1464,7 @@ class MainRepositoryImpl(
                     scope.launch {
                         playMediaPlayer(MediaPlayer.create(context, R.raw.restart_radio), true)
                         setInput("")
-                        if (getConnType() == "Репитер (2 Канала)") {
-                            delay(10000)
-                            if (!preferencesRepository.getDtmModule()) {
-                                stopDtmf()
-                            } else setFlashlight(false)
-                        }
+                        flagVoise = false
                     }
                 } else if (input == "5") {
                     scope.launch {
@@ -1529,12 +1521,7 @@ class MainRepositoryImpl(
                             delayTon1000hz { speakText("Текущее атмосферное давление составляет $pressure") }
                         }
                         setInput("")
-                        if (getConnType() == "Репитер (2 Канала)") {
-                            delay(10000)
-                            if (!preferencesRepository.getDtmModule()) {
-                                stopDtmf()
-                            } else setFlashlight(false)
-                        }
+                        flagVoise = false
                     }
                 } else if (input == "7") {
                     scope.launch {
@@ -1548,11 +1535,11 @@ class MainRepositoryImpl(
                                 )
                             }
                             setInput("")
+                            flagVoise = false
                             delay(7000)
                             // Переключаемся на основной поток
                             withContext(Dispatchers.Main) {
                                 startSpeechRecognition()
-                                if (!preferencesRepository.getDtmModule()) stopDtmf()
                             }
                         } else {
                             delayTon1000hz {
@@ -1564,12 +1551,7 @@ class MainRepositoryImpl(
                                 )
                             }
                             setInput("")
-                            if (getConnType() == "Репитер (2 Канала)") {
-                                delay(14000)
-                                if (!preferencesRepository.getDtmModule()) {
-                                    stopDtmf()
-                                } else setFlashlight(false)
-                            }
+                            flagVoise = false
                         }
                     }
                 }
@@ -1584,6 +1566,7 @@ class MainRepositoryImpl(
                         setInput("")
                         playMediaPlayer(MediaPlayer.create(context, R.raw.clear_number), true)
                         setInput("")
+                        flagVoise = false
                         if (getConnType() == "Репитер (2 Канала)") {
                             delay(10000)
                             if (!preferencesRepository.getDtmModule()) {
@@ -1603,6 +1586,7 @@ class MainRepositoryImpl(
                     playMediaPlayer(MediaPlayer.create(context, audioFileId), playMusic = true)
                     setPlayMusic(!playMusic)
                     setInput("")
+                    flagVoise = false
                 }
 
                 if (input.length in 3..11) {
@@ -1629,6 +1613,7 @@ class MainRepositoryImpl(
                             sim = 0
                             delayTon1000hz {
                                 speakText("Звоню с $operatorName1")
+                                flagVoise = true
                             }
                             delay(5000)
                             if (getConnType() == "Репитер (1 Канал)") {
@@ -1654,6 +1639,7 @@ class MainRepositoryImpl(
                             sim = 1
                             delayTon1000hz {
                                 speakText("Звоню с $operatorName2")
+                                flagVoise = true
                             }
                             delay(5000)
                             if (getConnType() == "Репитер (1 Канал)") {
@@ -1676,7 +1662,12 @@ class MainRepositoryImpl(
                         playMediaPlayer(MediaPlayer.create(context, R.raw.clear_input), true)
                     }
                     setInput("")
+                } else {
+                    if (preferencesRepository.getDtmModule()) {
+                        setFlashlight(false)
+                    }
                 }
+
                 if (getCall() != null) {
                     DtmfService.callEnd(context)
                 }
@@ -1709,7 +1700,9 @@ class MainRepositoryImpl(
                 (audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC) * 0.7).toInt(),
                 0
             )
-            setFlashlight(true)
+            if (!preferencesRepository.getDtmModule()) {
+                setFlashlight(true)
+            }
         }
         _isDTMFStarted.update { true }
         DtmfService.start(context)
@@ -1756,6 +1749,7 @@ class MainRepositoryImpl(
             if (getCallDirection() != CallDirection.DIRECTION_INCOMING && phoneAccount > 1) {
                 if (!flagSim) {
                     playMediaPlayer(MediaPlayer.create(context, R.raw.select_sim), true)
+                    flagVoise = true
                 }
                 flagSim = true
             } else {
@@ -1773,6 +1767,7 @@ class MainRepositoryImpl(
                     isButtonPressed = true
                     delayTon1000hz {
                         speakText("Звоню с $operatorName1")
+                        flagVoise = true
                     }
                     delay(5000)
                     if (getConnType() == "Репитер (1 Канал)") {
@@ -1795,6 +1790,7 @@ class MainRepositoryImpl(
                     isButtonPressed = true
                     delayTon1000hz {
                         speakText("Звоню с $operatorName2")
+                        flagVoise = true
                     }
                     delay(5000)
                     if (getConnType() == "Репитер (1 Канал)") {
@@ -2030,7 +2026,7 @@ class MainRepositoryImpl(
             mediaPlayer = player.also {
                 it.setOnCompletionListener {
                   //  Log.d("Контрольный лог", "МЕДИА ПЛЕЕР ОСТАНОВЛЕН")
-                    if (getConnType() == "Репитер (1 Канал)") {
+                    if ((getConnType() == "Репитер (1 Канал)" || getConnType() == "Репитер (2 Канала)") && !flagVoise) {
                         setFlashlight(false)
                     }
                 }
@@ -2064,7 +2060,7 @@ class MainRepositoryImpl(
             override fun onDone(utteranceId: String?) {
                // Log.d("Контрольный лог", "ТТС ЗАВЕРШИЛ ПРОИЗНЕСЕНИЕ")
                 // VOX СИСТЕМА выключаем вспышку при остановке сообщения ттс
-                if (getConnType() == "Репитер (1 Канал)") {
+                if ((getConnType() == "Репитер (1 Канал)" || getConnType() == "Репитер (2 Канала)") && !flagVoise) {
                     setFlashlight(false)
                 }
             }
@@ -2073,7 +2069,7 @@ class MainRepositoryImpl(
             override fun onError(utteranceId: String?) {
                // Log.e("Контрольный лог", "Ошибка ТТС: $utteranceId")
                 // VOX СИСТЕМА выключаем вспышку при ошибке сообщения ттс
-                if (getConnType() == "Репитер (1 Канал)") {
+                if (getConnType() == "Репитер (1 Канал)" || getConnType() == "Репитер (2 Канала)") {
                     setFlashlight(false)
                 }
             }
