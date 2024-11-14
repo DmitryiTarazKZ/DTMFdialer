@@ -10,4 +10,5 @@ data class SettingsScreenState(
     var delayMusic2: Long = 500L,
     var connType: String = "",
     var soundSource: String = "",
+    var soundTest: Boolean = false,
 )

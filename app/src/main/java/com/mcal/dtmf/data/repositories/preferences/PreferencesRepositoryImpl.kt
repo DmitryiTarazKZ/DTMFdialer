@@ -1,7 +1,9 @@
 package com.mcal.dtmf.data.repositories.preferences
 
 import android.content.Context
+import android.util.Log
 import androidx.preference.PreferenceManager
+import com.mcal.dtmf.data.repositories.main.MainRepository
 import kotlinx.coroutines.flow.*
 
 class PreferencesRepositoryImpl(
@@ -21,6 +23,7 @@ class PreferencesRepositoryImpl(
         private const val DELAY_VOX2 = "delay_vox2"
         private const val IS_EMERGENCY = "is_emergency"
         private const val IS_EMERGENCY1 = "is_emergency1"
+        private const val IS_EMERGENCY2 = "is_emergency2"
     }
 
     private val prefs = PreferenceManager.getDefaultSharedPreferences(context)
@@ -37,6 +40,7 @@ class PreferencesRepositoryImpl(
     private val _delayMusic2: MutableStateFlow<Long?> = MutableStateFlow(null)
     private val _connType: MutableStateFlow<String?> = MutableStateFlow(null)
     private val _soundSource: MutableStateFlow<String?> = MutableStateFlow(null)
+    private val _soundTest: MutableStateFlow<Boolean?> = MutableStateFlow(null)
 
 
     /**
@@ -95,7 +99,7 @@ class PreferencesRepositoryImpl(
     override fun getSoundSourceFlow(): Flow<String> = flow {
         if (_soundSource.value == null) {
             try {
-                getConnType()
+                getSoundSource()
             } catch (ex: Exception) {
                 ex.printStackTrace()
             }
@@ -111,6 +115,59 @@ class PreferencesRepositoryImpl(
     override fun setSoundSource(value: String) {
         prefs.edit().putString(IS_EMERGENCY1, value).apply()
         _soundSource.update { value }
+    }
+
+    /**
+     * Тестирование доступных источников
+     */
+
+    override fun getSoundTestFlow(): Flow<Boolean> = flow {
+        if (_soundTest.value == null) {
+            try {
+                getSoundTest()
+            } catch (ex: Exception) {
+                ex.printStackTrace()
+            }
+        }
+    }
+
+    override fun getSoundTest(): Boolean {
+        return _soundTest.value ?: prefs.getBoolean(IS_EMERGENCY2, false)
+    }
+
+    override fun setSoundTest(enabled: Boolean) {
+        prefs.edit().putBoolean(IS_EMERGENCY2, enabled).apply()
+        if (enabled) {
+            Log.d("SoundTest", "Начало тестирования источников звука")
+
+            // Список всех источников звука для тестирования
+            val audioSources = listOf(
+                "MIC",
+                "VOICE_UPLINK",
+                "VOICE_DOWNLINK",
+                "VOICE_CALL",
+                "CAMCORDER",
+                "VOICE_RECOGNITION",
+                "VOICE_COMMUNICATION",
+                "REMOTE_SUBMIX",
+                "UNPROCESSED",
+                "VOICE_PERFORMANCE"
+            )
+
+            // Перебираем все источники звука
+            audioSources.forEach { sourceName ->
+                Log.d("SoundTest", "Тестирование источника: $sourceName")
+                try {
+                    setSoundSource(sourceName)
+                    Log.d("SoundTest", "Источник $sourceName установлен успешно")
+                    // mainRepository.record()
+                } catch (e: Exception) {
+                    Log.e("SoundTest", "Ошибка при тестировании источника $sourceName", e)
+                }
+            }
+            Log.d("SoundTest", "Тестирование источников звука завершено")
+        }
+        _soundTest.update { enabled }
     }
 
     /**

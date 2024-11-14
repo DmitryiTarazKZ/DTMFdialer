@@ -39,6 +39,10 @@ interface PreferencesRepository {
     fun getSoundSource(): String
     fun setSoundSource(value: String)
 
+    fun getSoundTestFlow(): Flow<Boolean>
+    fun getSoundTest(): Boolean
+    fun setSoundTest(enabled: Boolean)
+
     fun getNumberAFlow(): Flow<String>
     fun getNumberA(): String
     fun setNumberA(number: String)

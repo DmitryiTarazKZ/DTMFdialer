@@ -39,7 +39,7 @@ import org.koin.android.ext.android.inject
 
 class MainActivity : ComponentActivity() {
     private val mainRepository: MainRepository by inject()
-    private val PERMISSION_CODE = 100
+    private val permissionCode = 100
 
     private val powerReceiver: BroadcastReceiver = object : BootReceiver() {
         override fun onReceive(context: Context, intent: Intent?) {
@@ -168,9 +168,6 @@ class MainActivity : ComponentActivity() {
             permissionsToRequest.add(Manifest.permission.READ_CONTACTS)
         }
 
-//        val intent = Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
-//        startActivity(intent)
-
         // Запрос разрешения на изменение состояния звука
         if (ContextCompat.checkSelfPermission(
                 this,
@@ -241,7 +238,7 @@ class MainActivity : ComponentActivity() {
             ActivityCompat.requestPermissions(
                 this,
                 permissionsToRequest.toTypedArray(),
-                PERMISSION_CODE
+                permissionCode
             )
         }
     }

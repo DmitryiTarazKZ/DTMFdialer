@@ -1,5 +1,6 @@
 package com.mcal.dtmf.ui.preferences
 
+import android.util.Log
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
@@ -116,9 +117,13 @@ class PreferencesScreen : AppScreen {
                                     "VOICE_PERFORMANCE",
                                 ),
                                 selectedItem = screenState.soundSource,
-                                onValueChange = viewModel::setSoundSource
+                                selectedItem1 = screenState.soundTest,
+
+                                onValueChange = viewModel::setSoundSource,
+                                onValueChange1 = viewModel::setSoundTest
                             )
                         }
+
                     Spacer(modifier = Modifier.height(15.dp))
                     }
 

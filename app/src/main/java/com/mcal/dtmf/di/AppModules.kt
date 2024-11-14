@@ -32,16 +32,16 @@ private val viewModelsModule = module {
 }
 
 private val repositoriesModule = module {
+    single<PreferencesRepository> {
+        PreferencesRepositoryImpl(
+            context = get()
+        )
+    }
+
     single<MainRepository> {
         MainRepositoryImpl(
             context = get(),
             preferencesRepository = get()
         )
-    }
-
-    single<PreferencesRepository> {
-        PreferencesRepositoryImpl(
-            context = get()
-        ) 
     }
 }

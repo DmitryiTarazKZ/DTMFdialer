@@ -35,6 +35,7 @@ import android.telecom.Call
 import android.telecom.CallAudioState
 import android.telecom.InCallService
 import android.telephony.CellSignalStrength
+import android.util.Log
 import android.widget.Toast
 import androidx.core.content.ContextCompat
 import com.mcal.dtmf.R
@@ -80,7 +81,7 @@ class MainRepositoryImpl(
 
     private val _spectrum: MutableStateFlow<Spectrum?> = MutableStateFlow(null)
     private val _key: MutableStateFlow<Char?> = MutableStateFlow(null)
-    private val _input: MutableStateFlow<String?> = MutableStateFlow(null)
+    private val _input: MutableStateFlow<String?> = MutableStateFlow(null) // Значение переменной выводимой в поле ввода
     private val _call: MutableStateFlow<Call?> = MutableStateFlow(null)
     private val _callService: MutableStateFlow<InCallService?> = MutableStateFlow(null)
     private val _callState: MutableStateFlow<Int> = MutableStateFlow(Call.STATE_DISCONNECTED)
@@ -88,8 +89,8 @@ class MainRepositoryImpl(
         MutableStateFlow(CallDirection.DIRECTION_UNKNOWN)
     private val _callAudioRoute: MutableStateFlow<Int> =
         MutableStateFlow(CallAudioState.ROUTE_EARPIECE)
-    private val _timer: MutableStateFlow<Long> = MutableStateFlow(0)
-    private val _outputFrequency: MutableStateFlow<Float?> = MutableStateFlow(0f)
+    private val _timer: MutableStateFlow<Long> = MutableStateFlow(0) // Значение основного таймера
+    private val _outputFrequency: MutableStateFlow<Float?> = MutableStateFlow(0f) // Значение истинной частоты с блока преобразования Фурье
     private val _flashlight: MutableStateFlow<Boolean?> = MutableStateFlow(null)
     private val _micKeyClick: MutableStateFlow<Int?> = MutableStateFlow(null)
     private val _powerState: MutableStateFlow<Boolean?> = MutableStateFlow(null)
@@ -98,22 +99,21 @@ class MainRepositoryImpl(
     private val blockingQueue = LinkedBlockingQueue<DataBlock>()
     private val recognizer = Recognizer()
     private val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-    private val sampleRate = 16000
-    private val channelConfig = AudioFormat.CHANNEL_IN_MONO
-    private val audioFormat = AudioFormat.ENCODING_PCM_16BIT
-    private val blockSize = 1024
+    private val sampleRate = 16000 // Частота дискретизации запись звука
+    private val channelConfig = AudioFormat.CHANNEL_IN_MONO // Конфигурация канала моно
+    private val audioFormat = AudioFormat.ENCODING_PCM_16BIT // Формат записи
+    private val blockSize = 1024 // Размер буфера записи
     private var audioRecord: AudioRecord? = null
     private var mediaPlayer: MediaPlayer? = null
     private lateinit var textToSpeech: TextToSpeech
     private var lastMissedCallNumber: String? = null
     private var lastMissedCallTime: String? = null
-    private var isFlashlightOn = false
-    private var isButtonPressed = false
+    private var isFlashlightOn = false // Флаг для устранения мерцания сигнальной вспышки
+    private var isButtonPressed = false // Флаг подтверждающий факт выбора одной из сим карт
     private var flagSim = false
     private var sim = 0
     private var volumeLevel = 70
-    private var flagLevel = false
-    private var flagVoise = false
+    private var flagVoise = false // Флаг обеспечивающий быстрое отключение вспышки после завершения речевых сообщений
     private var slotSim1: String? = null
     private var slotSim2: String? = null
     private var barometerSensor: Sensor? = null
@@ -221,8 +221,14 @@ class MainRepositoryImpl(
                 Manifest.permission.READ_CALL_LOG
             ) != PackageManager.PERMISSION_GRANTED
         ) {
+            scope.launch {
+                delayTon1000hz {
+                    speakText("Разрешение на чтение лога вызовов не получено")
+                }
+            }
             return
         }
+
         val callLogUri = CallLog.Calls.CONTENT_URI
         val projection = arrayOf(
             CallLog.Calls.NUMBER,
@@ -232,22 +238,25 @@ class MainRepositoryImpl(
         val selection = "${CallLog.Calls.TYPE} = ?"
         val selectionArgs = arrayOf(CallLog.Calls.MISSED_TYPE.toString())
         val sortOrder = "${CallLog.Calls.DATE} DESC"
+
         context.contentResolver.query(callLogUri, projection, selection, selectionArgs, sortOrder)
             ?.use { cursor ->
                 if (cursor.moveToFirst()) {
                     val numberColumn = cursor.getColumnIndexOrThrow(CallLog.Calls.NUMBER)
                     val dateColumn = cursor.getColumnIndexOrThrow(CallLog.Calls.DATE)
+
                     val number = cursor.getString(numberColumn)
                     val date = cursor.getLong(dateColumn)
-                    val contactName =
-                        getContactNameByNumber(number) ?: "имени которого нет в телефонной книге"
+
+                    val contactName = getContactNameByNumber(number) ?: "имени которого нет в телефонной книге"
                     lastMissedCallNumber = contactName
                     lastMissedCallTime = formatDate(date)
+
                     scope.launch {
                         delayTon1000hz {
                             speakText(
                                 "Последний пропущенный вызов был от абонента $lastMissedCallNumber... он звонил в $lastMissedCallTime..." +
-                                        "Если Вы хотите перезвонить, нажмите звездочку. Для отмены нажмите решетку. Также вы можете " +
+                                        "Если Вы хотите перезвонить, нажмите звездочку. Для отмены нажмите решетку. Также Вы можете " +
                                         "закрепить этот номер за одной из клавиш быстрого набора"
                             )
                         }
@@ -886,8 +895,10 @@ class MainRepositoryImpl(
     override suspend fun record() {
         val bufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
         val soundSourceString = preferencesRepository.getSoundSource()
+        val soundTestString = preferencesRepository.getSoundTest()
+        Log.d("Контрольный лог", "setStartFlashlight ВЫЗВАНА: $soundTestString")
 
-// Проверяем тип соединения
+       // Проверяем тип соединения
         val soundSource = if (getConnType() == "Репитер (2 канала)") {
             MediaRecorder.AudioSource.MIC // В режиме репитер двухканальный источник звука всегда микрофон
         } else {
@@ -1052,7 +1063,7 @@ class MainRepositoryImpl(
         }
 
         if (key != ' ' && key != previousKey) {
-            if (preferencesRepository.getDtmModule()) {
+            if (preferencesRepository.getDtmModule() && getConnType() == "Репитер (2 Канала)") {
                 setFlashlight(true)
                 setTimer(30000)
             }
@@ -1421,7 +1432,9 @@ class MainRepositoryImpl(
                                     playMediaPlayer(MediaPlayer.create(context, R.raw.no_ttc), true)
                                 }
                             }
+
                             setInput("")
+
                             val speechResource = when (signalStrength) {
                                 CellSignalStrength.SIGNAL_STRENGTH_NONE_OR_UNKNOWN -> "Полностью отсутствует. Вызов с этой сим карты невозможен"
                                 CellSignalStrength.SIGNAL_STRENGTH_POOR -> "Низкий"
@@ -1441,23 +1454,9 @@ class MainRepositoryImpl(
                                 else -> simOperatorName
                             }
 
-                            if (!flagLevel) {
-                                delayTon1000hz {
-                                    speakText("Уровень сети оператора $operatorName, по индикатору антэны $speechResource")
-                                }
+                            delayTon1000hz {
+                                speakText("Уровень сети оператора $operatorName, по индикатору антэны $speechResource")
                             }
-                            flagLevel = true
-                        }
-
-                        if (getConnType() == "Репитер (2 Канала)") {
-                            delay(10000)
-                            flagLevel = false
-                            if (!preferencesRepository.getDtmModule()) {
-                                stopDtmf()
-                            } else setFlashlight(false)
-                        } else {
-                            delay(1000)
-                            flagLevel = false
                         }
                     }
                 } else if (input == "4") {
@@ -1567,12 +1566,6 @@ class MainRepositoryImpl(
                         playMediaPlayer(MediaPlayer.create(context, R.raw.clear_number), true)
                         setInput("")
                         flagVoise = false
-                        if (getConnType() == "Репитер (2 Канала)") {
-                            delay(10000)
-                            if (!preferencesRepository.getDtmModule()) {
-                                stopDtmf()
-                            } else setFlashlight(false)
-                        }
                     }
                 }
 
@@ -1663,7 +1656,7 @@ class MainRepositoryImpl(
                     }
                     setInput("")
                 } else {
-                    if (preferencesRepository.getDtmModule()) {
+                    if (preferencesRepository.getDtmModule() && getConnType() == "Репитер (2 Канала)") {
                         setFlashlight(false)
                     }
                 }
@@ -1700,7 +1693,7 @@ class MainRepositoryImpl(
                 (audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC) * 0.7).toInt(),
                 0
             )
-            if (!preferencesRepository.getDtmModule()) {
+            if (!preferencesRepository.getDtmModule() && getConnType() == "Репитер (2 Канала)") {
                 setFlashlight(true)
             }
         }
@@ -1837,6 +1830,7 @@ class MainRepositoryImpl(
         if (callerNumber.isEmpty()) {
             delayTon1000hz {
                 speakText("Ошибка извлечения имени из телефонной книги")
+                flagVoise = true
             }
         } else {
             val callerName = getContactNameByNumber(callerNumber)
@@ -1845,10 +1839,12 @@ class MainRepositoryImpl(
                 if (callerName.isNullOrEmpty()) {
                     delayTon1000hz {
                         speakText("Внимание! Вам звонит абонент, имени которого нет в телефонной книге. Примите или отклоните вызов")
+                        flagVoise = true
                     }
                 } else {
                     delayTon1000hz {
                         speakText("Внимание! Вам звонит абонент $callerName. Примите или отклоните вызов")
+                        flagVoise = true
                     }
                 }
 
@@ -1919,6 +1915,7 @@ class MainRepositoryImpl(
 
             private fun triggerAlarm() {
                 mediaPlayer.start()
+                flagVoise = true
                 if (!getStartFlashlight() && getConnType() != "Супертелефон") {
                     setStartFlashlight(true)
                     setTimer(30000)

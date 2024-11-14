@@ -22,6 +22,7 @@ class PreferencesViewModel(
             serviceNumber = preferencesRepository.getServiceNumber(),
             connType = preferencesRepository.getConnType(),
             soundSource = preferencesRepository.getSoundSource(),
+            soundTest = preferencesRepository.getSoundTest(),
             delayMusic = preferencesRepository.getDelayMusic(),
             delayMusic1 = preferencesRepository.getDelayMusic1(),
             delayMusic2 = preferencesRepository.getDelayMusic2(),
@@ -57,6 +58,14 @@ class PreferencesViewModel(
             _screenState.update {
                 it.copy(
                     soundSource = soundSource
+                )
+            }
+        }.launchIn(screenModelScope)
+
+        preferencesRepository.getSoundTestFlow().map { enabled ->
+            _screenState.update {
+                it.copy(
+                    soundTest = enabled
                 )
             }
         }.launchIn(screenModelScope)
@@ -121,6 +130,10 @@ class PreferencesViewModel(
 
     fun setSoundSource(value: String) {
         preferencesRepository.setSoundSource(value)
+    }
+
+    fun setSoundTest(value: Boolean) {
+        preferencesRepository.setSoundTest(value)
     }
 
     fun setDelayMusic(value: Long) {

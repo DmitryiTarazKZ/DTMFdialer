@@ -28,6 +28,8 @@ fun PreferenceRadioButtonDialog1(
     items: List<String>,
     selectedItem: String,
     onValueChange: (String) -> Unit,
+    selectedItem1: Boolean,
+    onValueChange1: (Boolean) -> Unit,
 ) {
     var showDialog by remember { mutableStateOf(false) }
     Row(
@@ -90,13 +92,27 @@ fun PreferenceRadioButtonDialog1(
                 )
             },
             confirmButton = {
-                OutlinedButton(
-                    onClick = {
-                        onValueChange(selectedItem)
-                        showDialog = false
-                    }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
                 ) {
-                    Text(text = stringResource(R.string.ok))
+                    OutlinedButton(
+                        onClick = {
+                            onValueChange1(selectedItem1)
+                            Log.d("Test", "Testing selected item: $selectedItem")
+                        },
+                        modifier = Modifier.padding(end = 30.dp)
+                    ) {
+                        Text(text = "ТЕСТ")
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            onValueChange(selectedItem)
+                            showDialog = false
+                        }
+                    ) {
+                        Text(text = stringResource(R.string.ok))
+                    }
                 }
             }
         )
