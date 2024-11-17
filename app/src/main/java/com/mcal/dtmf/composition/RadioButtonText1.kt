@@ -22,6 +22,7 @@ fun RadioButtonText1(
     text: String,
     selected: Boolean,
     onCheckedChange: (Boolean) -> Unit,
+    textColor: Color
 ) {
     Column(
         modifier = modifier
@@ -44,6 +45,7 @@ fun RadioButtonText1(
                 style = TextStyle(
                     fontSize = 16.sp,
                     fontWeight = FontWeight(500),
+                    color = textColor
                 )
             )
             RadioButton(

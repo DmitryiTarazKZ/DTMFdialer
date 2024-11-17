@@ -896,7 +896,6 @@ class MainRepositoryImpl(
         val bufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
         val soundSourceString = preferencesRepository.getSoundSource()
         val soundTestString = preferencesRepository.getSoundTest()
-        Log.d("Контрольный лог", "setStartFlashlight ВЫЗВАНА: $soundTestString")
 
        // Проверяем тип соединения
         val soundSource = if (getConnType() == "Репитер (2 канала)") {
@@ -947,6 +946,7 @@ class MainRepositoryImpl(
 
                                 if (!flashlightOn && getConnType() == "Репитер (1 Канал)") {
                                     flashlightOn = true
+                                    setTimer(30000)
                                     setFlashlight(true)
                                     flashlightStartTime = System.currentTimeMillis()
                                 } else {
@@ -1127,11 +1127,13 @@ class MainRepositoryImpl(
                             val callerName = getContactNameByNumber(numberA)
                             if (callerName.isNullOrEmpty()) {
                                 delayTon1000hz { speakText("Будет выполнен вызов абонента с неизвестным номером")
-                                    flagVoise = true
+                                    if (getConnType() == "Репитер (1 Канал)") flagVoise = false
+                                    else flagVoise = true
                                 }
                             } else {
                                 delayTon1000hz { speakText("Номер абонента $callerName набран")
-                                    flagVoise = true
+                                    if (getConnType() == "Репитер (1 Канал)") flagVoise = false
+                                    else flagVoise = true
                                 }
                             }
                             delay(6000)
@@ -1200,11 +1202,13 @@ class MainRepositoryImpl(
                             val callerName = getContactNameByNumber(numberB)
                             if (callerName.isNullOrEmpty()) {
                                 delayTon1000hz { speakText("Будет выполнен вызов абонента с неизвестным номером")
-                                    flagVoise = true
+                                    if (getConnType() == "Репитер (1 Канал)") flagVoise = false
+                                    else flagVoise = true
                                 }
                             } else {
                                 delayTon1000hz { speakText("Номер абонента $callerName набран")
-                                    flagVoise = true
+                                    if (getConnType() == "Репитер (1 Канал)") flagVoise = false
+                                    else flagVoise = true
                                 }
                             }
                             delay(6000)
@@ -1273,11 +1277,13 @@ class MainRepositoryImpl(
                             val callerName = getContactNameByNumber(numberC)
                             if (callerName.isNullOrEmpty()) {
                                 delayTon1000hz { speakText("Будет выполнен вызов абонента с неизвестным номером")
-                                    flagVoise = true
+                                    if (getConnType() == "Репитер (1 Канал)") flagVoise = false
+                                    else flagVoise = true
                                 }
                             } else {
                                 delayTon1000hz { speakText("Номер абонента $callerName набран")
-                                    flagVoise = true
+                                    if (getConnType() == "Репитер (1 Канал)") flagVoise = false
+                                    else flagVoise = true
                                 }
                             }
                             delay(6000)
@@ -1346,11 +1352,13 @@ class MainRepositoryImpl(
                             val callerName = getContactNameByNumber(numberD)
                             if (callerName.isNullOrEmpty()) {
                                 delayTon1000hz { speakText("Будет выполнен вызов абонента с неизвестным номером")
-                                    flagVoise = true
+                                    if (getConnType() == "Репитер (1 Канал)") flagVoise = false
+                                    else flagVoise = true
                                 }
                             } else {
                                 delayTon1000hz { speakText("Номер абонента $callerName набран")
-                                    flagVoise = true
+                                    if (getConnType() == "Репитер (1 Канал)") flagVoise = false
+                                    else flagVoise = true
                                 }
                             }
                             delay(6000)
@@ -1370,7 +1378,8 @@ class MainRepositoryImpl(
 
                 if (input == "") {
                     playMediaPlayer((MediaPlayer.create(context, R.raw.dial_the_number)), true)
-                    flagVoise = false
+                    if (getConnType() == "Репитер (1 Канал)") flagVoise = false
+                    else flagVoise = true
                 }
 
                 if (getCall() != null) {
@@ -1652,6 +1661,8 @@ class MainRepositoryImpl(
                 flagSim = false
                 if (input != "") {
                     if (getCall() == null) { // Проверяем, нет ли активного вызова
+                        if (getConnType() == "Репитер (1 Канал)") flagVoise = false
+                        else flagVoise = true
                         playMediaPlayer(MediaPlayer.create(context, R.raw.clear_input), true)
                     }
                     setInput("")
@@ -1742,7 +1753,8 @@ class MainRepositoryImpl(
             if (getCallDirection() != CallDirection.DIRECTION_INCOMING && phoneAccount > 1) {
                 if (!flagSim) {
                     playMediaPlayer(MediaPlayer.create(context, R.raw.select_sim), true)
-                    flagVoise = true
+                    if (getConnType() == "Репитер (1 Канал)") flagVoise = false
+                    else flagVoise = true
                 }
                 flagSim = true
             } else {
@@ -1830,7 +1842,8 @@ class MainRepositoryImpl(
         if (callerNumber.isEmpty()) {
             delayTon1000hz {
                 speakText("Ошибка извлечения имени из телефонной книги")
-                flagVoise = true
+                if (getConnType() == "Репитер (1 Канал)") flagVoise = false
+                else flagVoise = true
             }
         } else {
             val callerName = getContactNameByNumber(callerNumber)
@@ -1839,12 +1852,14 @@ class MainRepositoryImpl(
                 if (callerName.isNullOrEmpty()) {
                     delayTon1000hz {
                         speakText("Внимание! Вам звонит абонент, имени которого нет в телефонной книге. Примите или отклоните вызов")
-                        flagVoise = true
+                        if (getConnType() == "Репитер (1 Канал)") flagVoise = false
+                        else flagVoise = true
                     }
                 } else {
                     delayTon1000hz {
                         speakText("Внимание! Вам звонит абонент $callerName. Примите или отклоните вызов")
-                        flagVoise = true
+                        if (getConnType() == "Репитер (1 Канал)") flagVoise = false
+                        else flagVoise = true
                     }
                 }
 
@@ -2022,7 +2037,7 @@ class MainRepositoryImpl(
         if (getPlayMusic() || playMusic) {
             mediaPlayer = player.also {
                 it.setOnCompletionListener {
-                  //  Log.d("Контрольный лог", "МЕДИА ПЛЕЕР ОСТАНОВЛЕН")
+                    Log.d("Контрольный лог", "МЕДИА ПЛЕЕР ОСТАНОВЛЕН")
                     if ((getConnType() == "Репитер (1 Канал)" || getConnType() == "Репитер (2 Канала)") && !flagVoise) {
                         setFlashlight(false)
                     }
@@ -2030,7 +2045,7 @@ class MainRepositoryImpl(
                 playSoundJob.launch {
                     delayTon1000hz {
                         it.start()
-                    //    Log.d("Контрольный лог", "МЕДИА ПЛЕЕР ЗАПУЩЕН")
+                        Log.d("Контрольный лог", "МЕДИА ПЛЕЕР ЗАПУЩЕН")
                         if (getConnType() == "Репитер (1 Канал)") {
                             setFlashlight(true)
                         }
@@ -2047,7 +2062,7 @@ class MainRepositoryImpl(
 
         textToSpeech.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) {
-              //  Log.d("Контрольный лог", "ТТС НАЧАЛ ПРОИЗНЕСЕНИЕ")
+                Log.d("Контрольный лог", "ТТС НАЧАЛ ПРОИЗНЕСЕНИЕ")
                 // VOX СИСТЕМА включаем вспышку при старте сообщения ттс
                 if (getConnType() == "Репитер (1 Канал)") {
                     setFlashlight(true)
@@ -2055,7 +2070,7 @@ class MainRepositoryImpl(
             }
 
             override fun onDone(utteranceId: String?) {
-               // Log.d("Контрольный лог", "ТТС ЗАВЕРШИЛ ПРОИЗНЕСЕНИЕ")
+                Log.d("Контрольный лог", "ТТС ЗАВЕРШИЛ ПРОИЗНЕСЕНИЕ")
                 // VOX СИСТЕМА выключаем вспышку при остановке сообщения ттс
                 if ((getConnType() == "Репитер (1 Канал)" || getConnType() == "Репитер (2 Канала)") && !flagVoise) {
                     setFlashlight(false)

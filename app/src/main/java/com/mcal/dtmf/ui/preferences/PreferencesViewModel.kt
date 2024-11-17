@@ -1,6 +1,7 @@
 package com.mcal.dtmf.ui.preferences
 
 import android.util.Log
+import androidx.compose.ui.graphics.Color
 import cafe.adriel.voyager.core.model.ScreenModel
 import cafe.adriel.voyager.core.model.screenModelScope
 import com.mcal.dtmf.data.model.domain.settings.SettingsScreenState
@@ -33,6 +34,10 @@ class PreferencesViewModel(
     )
     val screenState = _screenState.asStateFlow()
 
+    // Добавлено: хранение доступности источников звука
+    private val _soundSourceAvailability = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    val soundSourceAvailability: StateFlow<Map<String, Boolean>> = _soundSourceAvailability.asStateFlow()
+
     init {
         fetchData()
     }
@@ -40,84 +45,63 @@ class PreferencesViewModel(
     private fun fetchData() = screenModelScope.launch(_exceptionHandler) {
         preferencesRepository.getServiceNumberFlow().map { number ->
             _screenState.update {
-                it.copy(
-                    serviceNumber = number
-                )
+                it.copy(serviceNumber = number)
             }
         }.launchIn(screenModelScope)
 
         preferencesRepository.getConnTypeFlow().map { connType ->
             _screenState.update {
-                it.copy(
-                    connType = connType
-                )
+                it.copy(connType = connType)
             }
         }.launchIn(screenModelScope)
 
         preferencesRepository.getSoundSourceFlow().map { soundSource ->
             _screenState.update {
-                it.copy(
-                    soundSource = soundSource
-                )
+                it.copy(soundSource = soundSource)
             }
         }.launchIn(screenModelScope)
 
         preferencesRepository.getSoundTestFlow().map { enabled ->
             _screenState.update {
-                it.copy(
-                    soundTest = enabled
-                )
+                it.copy(soundTest = enabled)
             }
         }.launchIn(screenModelScope)
 
         preferencesRepository.getDelayMusicFlow().map { delayMusic ->
             _screenState.update {
-                it.copy(
-                    delayMusic = delayMusic
-                )
+                it.copy(delayMusic = delayMusic)
             }
         }.launchIn(screenModelScope)
 
         preferencesRepository.getDelayMusic1Flow().map { delayMusic1 ->
             _screenState.update {
-                it.copy(
-                    delayMusic1 = delayMusic1
-                )
+                it.copy(delayMusic1 = delayMusic1)
             }
         }.launchIn(screenModelScope)
 
         preferencesRepository.getDelayMusic2Flow().map { delayMusic2 ->
             _screenState.update {
-                it.copy(
-                    delayMusic2 = delayMusic2
-                )
+                it.copy(delayMusic2 = delayMusic2)
             }
         }.launchIn(screenModelScope)
 
         preferencesRepository.getPlayMusicFlow().map { enabled ->
             _screenState.update {
-                it.copy(
-                    isPlayMusic = enabled
-                )
+                it.copy(isPlayMusic = enabled)
             }
         }.launchIn(screenModelScope)
 
         preferencesRepository.getFlashSignalFlow().map { enabled ->
             _screenState.update {
-                it.copy(
-                    isFlashSignal = enabled
-                )
+                it.copy(isFlashSignal = enabled)
             }
         }.launchIn(screenModelScope)
 
         preferencesRepository.getDtmModuleFlow().map { enabled ->
             _screenState.update {
-                it.copy(
-                    isNoDtmModule = enabled
-                )
+                it.copy(isNoDtmModule = enabled)
             }
         }.launchIn(screenModelScope)
-
     }
 
     fun setServiceNumber(value: String) {
@@ -132,8 +116,14 @@ class PreferencesViewModel(
         preferencesRepository.setSoundSource(value)
     }
 
-    fun setSoundTest(value: Boolean) {
-        preferencesRepository.setSoundTest(value)
+    fun setSoundTest(enabled: Boolean) {
+        preferencesRepository.setSoundTest(enabled) { sourceName, isAvailable ->
+            _soundSourceAvailability.update { currentAvailability ->
+                currentAvailability.toMutableMap().apply {
+                    this[sourceName] = isAvailable
+                }
+            }
+        }
     }
 
     fun setDelayMusic(value: Long) {

@@ -6,7 +6,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -30,6 +34,7 @@ fun PreferenceRadioButtonDialog1(
     onValueChange: (String) -> Unit,
     selectedItem1: Boolean,
     onValueChange1: (Boolean) -> Unit,
+    soundSourceAvailability: Map<String, Boolean> // Добавлено
 ) {
     var showDialog by remember { mutableStateOf(false) }
     Row(
@@ -75,6 +80,7 @@ fun PreferenceRadioButtonDialog1(
         AlertDialog(
             onDismissRequest = {
                 showDialog = false
+                onValueChange1(false) // Добавлено: сбрасываем состояние теста при закрытии диалога
             },
             title = {
                 Text(
@@ -87,8 +93,9 @@ fun PreferenceRadioButtonDialog1(
                     items = items,
                     selectedItem = selectedItem,
                     onValueChange = { newValue ->
-                        onValueChange(newValue)
+                    onValueChange(newValue)
                     },
+                    soundSourceAvailability = soundSourceAvailability // Исправлено: используем именованный аргумент
                 )
             },
             confirmButton = {
@@ -98,10 +105,9 @@ fun PreferenceRadioButtonDialog1(
                 ) {
                     OutlinedButton(
                         onClick = {
-                            onValueChange1(selectedItem1)
-                            Log.d("Test", "Testing selected item: $selectedItem")
+                            onValueChange1(true)
                         },
-                        modifier = Modifier.padding(end = 30.dp)
+                        modifier = Modifier.padding(end = 8.dp)
                     ) {
                         Text(text = "ТЕСТ")
                     }
@@ -124,6 +130,7 @@ fun TextSpinnerRadioButton1(
     items: List<String>,
     selectedItem: String,
     onValueChange: (String) -> Unit,
+    soundSourceAvailability: Map<String, Boolean> // Добавлено
 ) {
     LazyColumn(
         modifier = modifier
@@ -131,12 +138,38 @@ fun TextSpinnerRadioButton1(
             .heightIn(max = 360.dp)
     ) {
         items(items) { item ->
-            RadioButtonText1(
-                modifier = Modifier.fillMaxWidth(),
-                text = item,
-                selected = item.lowercase() == selectedItem.lowercase()
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
             ) {
-                onValueChange(item)
+                // Условие для отображения иконок только после нажатия кнопки "ТЕСТ"
+                if (soundSourceAvailability.isNotEmpty()) {
+                    val isAvailable = soundSourceAvailability[item] ?: false
+                    val icon = when {
+                        isAvailable && item != "Отладка порога и удержания" -> Icons.Default.Check // Зелёная галочка для доступных источников
+                        !isAvailable && item != "Отладка порога и удержания" -> Icons.Default.Close // Красный крестик для недоступных источников
+                        else -> null // Не показываем иконку для "Отладка порога и удержания"
+                    }
+
+                    icon?.let {
+                        Icon(
+                            imageVector = it,
+                            contentDescription = null,
+                            tint = if (isAvailable) Color.Green else Color.Red // Устанавливаем цвет в зависимости от доступности
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(8.dp)) // Убираем пробел для иконки
+                RadioButtonText1(
+                    modifier = Modifier.fillMaxWidth(),
+                    text = item,
+                    selected = item.lowercase() == selectedItem.lowercase(),
+                    textColor = Color.Unspecified, // Цвет текста не меняем
+                    onCheckedChange = {
+                        onValueChange(item) // Передаем обработчик изменения состояния
+                    }
+                )
             }
         }
     }

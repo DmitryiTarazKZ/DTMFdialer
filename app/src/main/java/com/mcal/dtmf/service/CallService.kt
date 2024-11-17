@@ -52,7 +52,7 @@ class CallService : InCallService(), KoinComponent {
 
             if (mainRepository.getFlashlight() ?: false) {
                 // Вспышка уже включена, ничего не делаем
-            } else {
+            } else if (mainRepository.getConnType() != "Супертелефон"){
                 // Включаем вспышку
                 mainRepository.setFlashlight(true)
             }

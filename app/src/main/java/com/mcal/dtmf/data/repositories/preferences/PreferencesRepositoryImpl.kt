@@ -1,13 +1,20 @@
 package com.mcal.dtmf.data.repositories.preferences
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
 import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.preference.PreferenceManager
-import com.mcal.dtmf.data.repositories.main.MainRepository
 import kotlinx.coroutines.flow.*
 
+
+
 class PreferencesRepositoryImpl(
-    context: Context,
+    private val context: Context,
 ) : PreferencesRepository {
     companion object {
         private const val NUMBER_A = "number_a"
@@ -41,6 +48,11 @@ class PreferencesRepositoryImpl(
     private val _connType: MutableStateFlow<String?> = MutableStateFlow(null)
     private val _soundSource: MutableStateFlow<String?> = MutableStateFlow(null)
     private val _soundTest: MutableStateFlow<Boolean?> = MutableStateFlow(null)
+    private val _soundSourceAvailability: MutableStateFlow<Map<String, Boolean>> = MutableStateFlow(emptyMap())
+    private val sampleRate = 16000 // Частота дискретизации запись звука
+    private val channelConfig = AudioFormat.CHANNEL_IN_MONO // Конфигурация канала моно
+    private val audioFormat = AudioFormat.ENCODING_PCM_16BIT // Формат записи
+    private val blockSize = 1024 // Размер буфера записи
 
 
     /**
@@ -108,7 +120,7 @@ class PreferencesRepositoryImpl(
     }
 
     override fun getSoundSource(): String {
-        val default = "Отладка порога и удержания" // Значение по умолчанию
+        val default = "MIC" // Значение по умолчанию
         return _soundSource.value ?: prefs.getString(IS_EMERGENCY1, default) ?: default
     }
 
@@ -135,37 +147,78 @@ class PreferencesRepositoryImpl(
         return _soundTest.value ?: prefs.getBoolean(IS_EMERGENCY2, false)
     }
 
-    override fun setSoundTest(enabled: Boolean) {
+    override fun setSoundTest(enabled: Boolean, onSourceTested: (String, Boolean) -> Unit) {
         prefs.edit().putBoolean(IS_EMERGENCY2, enabled).apply()
         if (enabled) {
-            Log.d("SoundTest", "Начало тестирования источников звука")
+            // Проверяем разрешение на запись аудио
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+                _soundTest.update { false }
+                return
+            }
 
-            // Список всех источников звука для тестирования
             val audioSources = listOf(
-                "MIC",
-                "VOICE_UPLINK",
-                "VOICE_DOWNLINK",
-                "VOICE_CALL",
-                "CAMCORDER",
-                "VOICE_RECOGNITION",
-                "VOICE_COMMUNICATION",
-                "REMOTE_SUBMIX",
-                "UNPROCESSED",
-                "VOICE_PERFORMANCE"
+                "MIC", "VOICE_UPLINK", "VOICE_DOWNLINK", "VOICE_CALL",
+                "CAMCORDER", "VOICE_RECOGNITION", "VOICE_COMMUNICATION",
+                "REMOTE_SUBMIX", "UNPROCESSED", "VOICE_PERFORMANCE"
             )
 
-            // Перебираем все источники звука
-            audioSources.forEach { sourceName ->
-                Log.d("SoundTest", "Тестирование источника: $sourceName")
-                try {
-                    setSoundSource(sourceName)
-                    Log.d("SoundTest", "Источник $sourceName установлен успешно")
-                    // mainRepository.record()
-                } catch (e: Exception) {
-                    Log.e("SoundTest", "Ошибка при тестировании источника $sourceName", e)
+            // Создаем карту доступности источников звука
+            val soundSourceAvailability = mutableMapOf<String, Boolean>()
+
+            // Запускаем тестирование в отдельном потоке
+            Thread {
+                audioSources.forEach { sourceName ->
+                    try {
+                        val soundSource = when (sourceName) {
+                            "MIC" -> MediaRecorder.AudioSource.MIC
+                            "VOICE_UPLINK" -> MediaRecorder.AudioSource.VOICE_UPLINK
+                            "VOICE_DOWNLINK" -> MediaRecorder.AudioSource.VOICE_DOWNLINK
+                            "VOICE_CALL" -> MediaRecorder.AudioSource.VOICE_CALL
+                            "CAMCORDER" -> MediaRecorder.AudioSource.CAMCORDER
+                            "VOICE_RECOGNITION" -> MediaRecorder.AudioSource.VOICE_RECOGNITION
+                            "VOICE_COMMUNICATION" -> MediaRecorder.AudioSource.VOICE_COMMUNICATION
+                            "REMOTE_SUBMIX" -> MediaRecorder.AudioSource.REMOTE_SUBMIX
+                            "UNPROCESSED" -> MediaRecorder.AudioSource.UNPROCESSED
+                            "VOICE_PERFORMANCE" -> MediaRecorder.AudioSource.VOICE_PERFORMANCE
+                            else -> MediaRecorder.AudioSource.DEFAULT
+                        }
+
+                        // Используем фиксированный размер буфера
+                        val bufferSize = blockSize
+                        var audioRecord: AudioRecord? = null
+                        try {
+                            audioRecord = AudioRecord(
+                                soundSource, sampleRate, channelConfig,
+                                audioFormat, bufferSize
+                            )
+
+                            if (audioRecord.state == AudioRecord.STATE_INITIALIZED) {
+                                audioRecord.startRecording()
+                                Thread.sleep(200) // Увеличена задержка для стабильности
+                                audioRecord.stop()
+                                soundSourceAvailability[sourceName] = true
+                                onSourceTested(sourceName, true) // Сообщаем об успехе
+                            } else {
+                                soundSourceAvailability[sourceName] = false
+                                onSourceTested(sourceName, false) // Сообщаем о неудаче
+                            }
+                        } catch (e: Exception) {
+                            soundSourceAvailability[sourceName] = false
+                            onSourceTested(sourceName, false) // Сообщаем о неудаче
+                        } finally {
+                            audioRecord?.release()
+                        }
+
+                    } catch (e: Exception) {
+                        soundSourceAvailability[sourceName] = false
+                        onSourceTested(sourceName, false) // Сообщаем о неудаче
+                    }
                 }
-            }
-            Log.d("SoundTest", "Тестирование источников звука завершено")
+            }.start()
+
+            // Обновляем доступность источников звука
+            _soundSourceAvailability.update { soundSourceAvailability }
         }
         _soundTest.update { enabled }
     }

@@ -45,6 +45,7 @@ class PreferencesScreen : AppScreen {
         val navigator = LocalNavigator.currentOrThrow
         val viewModel = getScreenModel<PreferencesViewModel>()
         val screenState by viewModel.screenState.collectAsState()
+        val soundSourceAvailability by viewModel.soundSourceAvailability.collectAsState()
 
         Scaffold(
             topBar = {
@@ -118,13 +119,16 @@ class PreferencesScreen : AppScreen {
                                 ),
                                 selectedItem = screenState.soundSource,
                                 selectedItem1 = screenState.soundTest,
-
-                                onValueChange = viewModel::setSoundSource,
-                                onValueChange1 = viewModel::setSoundTest
+                                onValueChange = { newValue ->
+                                    viewModel.setSoundSource(newValue)
+                                },
+                                onValueChange1 = { newValue ->
+                                    viewModel.setSoundTest(newValue)
+                                },
+                                soundSourceAvailability = soundSourceAvailability
                             )
                         }
-
-                    Spacer(modifier = Modifier.height(15.dp))
+                        Spacer(modifier = Modifier.height(15.dp))
                     }
 
                     if (screenState.connType == "Супертелефон") {
