@@ -1,10 +1,13 @@
 package com.mcal.dtmf.utils
 
+import android.Manifest
+import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Context.TELEPHONY_SERVICE
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.os.BatteryManager
 import android.os.Environment
@@ -13,11 +16,16 @@ import android.os.Looper
 import android.telephony.PhoneStateListener
 import android.telephony.SignalStrength
 import android.telephony.TelephonyManager
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import java.io.File
 
 
 class Utils {
     companion object {
+
+            private const val REQUEST_CODE = 1001 // Выберите любое уникальное значение
+
 
         // Получение данных о том подключенны наушники или нет
         fun registerHeadphoneReceiver(context: Context, callback: (Boolean) -> Unit) {
@@ -75,8 +83,16 @@ class Utils {
                 "Не удалось получить данные"
             }
         }
+
         // Выгрузка файлов с assets в Donwload на устройство
         fun copyFileFromAssets(context: Context, path: String) {
+            // Проверка разрешения на запись в хранилище
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                // Запрос разрешения (это нужно делать в Activity или Fragment)
+                ActivityCompat.requestPermissions(context as Activity, arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), REQUEST_CODE)
+                return
+            }
+
             val filename = path.split("/").last()
             val copiedFile = File(
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),

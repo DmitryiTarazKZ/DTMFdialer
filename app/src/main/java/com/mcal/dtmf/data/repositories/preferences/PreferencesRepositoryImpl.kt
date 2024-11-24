@@ -24,7 +24,6 @@ class PreferencesRepositoryImpl(
         private const val NUMBER_SERVICE = "number_service"
         private const val PLAY_MUSIC = "play_music"
         private const val FLASH_SIGNAL = "flash_signal"
-        private const val FLASH_SIGNAL1 = "dtmf_module"
         private const val DELAY_VOX = "delay_vox"
         private const val DELAY_VOX1 = "delay_vox1"
         private const val DELAY_VOX2 = "delay_vox2"
@@ -41,7 +40,6 @@ class PreferencesRepositoryImpl(
     private val _serviceNumber: MutableStateFlow<String?> = MutableStateFlow(null)
     private val _playMusic: MutableStateFlow<Boolean?> = MutableStateFlow(null)
     private val _flashSignal: MutableStateFlow<Boolean?> = MutableStateFlow(null)
-    private val _flashSignal1: MutableStateFlow<Boolean?> = MutableStateFlow(null)
     private val _delayMusic: MutableStateFlow<Long?> = MutableStateFlow(null)
     private val _delayMusic1: MutableStateFlow<Long?> = MutableStateFlow(null)
     private val _delayMusic2: MutableStateFlow<Long?> = MutableStateFlow(null)
@@ -95,7 +93,7 @@ class PreferencesRepositoryImpl(
     }
 
     override fun getConnType(): String {
-        val default = "Репитер (2 Канала)" // Значение по умолчанию
+        val default = "Репитер (2 Канала+)" // Значение по умолчанию
         return _connType.value ?: prefs.getString(IS_EMERGENCY, default) ?: default
     }
 
@@ -267,29 +265,6 @@ class PreferencesRepositoryImpl(
     override fun setFlashSignal(enabled: Boolean) {
         prefs.edit().putBoolean(FLASH_SIGNAL, enabled).apply()
         _flashSignal.update { enabled }
-    }
-
-    /**
-     *  Включение непрерывного анализа в режиме репитер двухканальный
-     */
-    override fun getDtmModuleFlow(): Flow<Boolean> = flow {
-        if (_flashSignal1.value == null) {
-            try {
-                getFlashSignal()
-            } catch (ex: Exception) {
-                ex.printStackTrace()
-            }
-        }
-        emitAll(_flashSignal1.filterNotNull())
-    }
-
-    override fun getDtmModule(): Boolean {
-        return _flashSignal1.value ?: prefs.getBoolean(FLASH_SIGNAL1, false)
-    }
-
-    override fun setDtmModule(enabled: Boolean) {
-        prefs.edit().putBoolean(FLASH_SIGNAL1, enabled).apply()
-        _flashSignal1.update { enabled }
     }
 
     /**

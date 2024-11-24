@@ -69,6 +69,8 @@ interface MainRepository {
 
     fun clickKey(input: String, key: Char?)
 
+    fun startDtmfIfNotRunning()
+
     fun stopDtmf()
 
     fun wakeUpScreen(context: Context)

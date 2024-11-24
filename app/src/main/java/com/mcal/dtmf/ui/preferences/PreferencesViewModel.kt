@@ -29,7 +29,6 @@ class PreferencesViewModel(
             delayMusic2 = preferencesRepository.getDelayMusic2(),
             isPlayMusic = preferencesRepository.getPlayMusic(),
             isFlashSignal = preferencesRepository.getFlashSignal(),
-            isNoDtmModule = preferencesRepository.getDtmModule(),
         )
     )
     val screenState = _screenState.asStateFlow()
@@ -96,12 +95,6 @@ class PreferencesViewModel(
                 it.copy(isFlashSignal = enabled)
             }
         }.launchIn(screenModelScope)
-
-        preferencesRepository.getDtmModuleFlow().map { enabled ->
-            _screenState.update {
-                it.copy(isNoDtmModule = enabled)
-            }
-        }.launchIn(screenModelScope)
     }
 
     fun setServiceNumber(value: String) {
@@ -142,7 +135,7 @@ class PreferencesViewModel(
         preferencesRepository.setFlashSignal(value)
     }
 
-    fun setNoDtmModule(value: Boolean) {
-        preferencesRepository.setDtmModule(value)
-    }
+//    fun setNoDtmModule(value: Boolean) {
+//        preferencesRepository.setDtmModule(value)
+//    }
 }

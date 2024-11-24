@@ -1,6 +1,5 @@
 package com.mcal.dtmf.ui.preferences
 
-import android.util.Log
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
@@ -89,6 +88,7 @@ class PreferencesScreen : AppScreen {
                             PreferenceRadioButtonDialog(
                                 text = "Режим работы",
                                 items = listOf(
+                                    "Репитер (2 Канала+)",
                                     "Репитер (2 Канала)",
                                     "Репитер (1 Канал)",
                                     "Супертелефон"
@@ -178,16 +178,6 @@ class PreferencesScreen : AppScreen {
                                 text = "Сигнальная вспышка",
                                 checked = screenState.isFlashSignal,
                                 onCheckedChange = viewModel::setFlashSignal,
-                            )
-                        }
-                    }
-
-                    if (screenState.connType == "Репитер (2 Канала)") {
-                        Card {
-                            PreferenceSwitch1(
-                                text = "Аппаратный DTMF",
-                                checked = screenState.isNoDtmModule,
-                                onCheckedChange = viewModel::setNoDtmModule,
                             )
                         }
                     }

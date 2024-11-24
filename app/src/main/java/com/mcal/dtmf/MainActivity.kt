@@ -28,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import cafe.adriel.voyager.navigator.Navigator
 import cafe.adriel.voyager.transitions.SlideTransition
 import com.mcal.dtmf.data.repositories.main.MainRepository
@@ -35,6 +36,8 @@ import com.mcal.dtmf.receiver.BootReceiver
 import com.mcal.dtmf.service.DtmfService
 import com.mcal.dtmf.ui.main.MainScreen
 import com.mcal.dtmf.ui.theme.VoyagerDialogTheme
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
 
 class MainActivity : ComponentActivity() {
@@ -140,6 +143,22 @@ class MainActivity : ComponentActivity() {
             registerReceiver(powerReceiver, intentFilter, RECEIVER_EXPORTED)
         } else {
             registerReceiver(powerReceiver, intentFilter)
+        }
+
+        // Запускаем корутину для проверки DTMF анализа
+        checkDtmfAnalysis()
+
+    }
+
+    // автозапуск дтмф анализа через каждую минуту если по какойто причине остановился
+    private fun checkDtmfAnalysis() {
+        lifecycleScope.launch {
+            while (true) { // Удалена переменная isCheckingDtmf
+                if (mainRepository.getConnType() != "Репитер (2 Канала)") {
+                    mainRepository.startDtmfIfNotRunning()
+                }
+                delay(60000) // Задержка на 1 минуту
+            }
         }
     }
 

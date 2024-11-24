@@ -67,21 +67,12 @@ class MainScreen : AppScreen {
         val context = LocalContext.current as Activity
 
         LaunchedEffect(screenState.connectType) {
-            when (screenState.connectType) {
-                "Репитер (2 Канала)" -> {
-                    // Устанавливаем флаг FLAG_KEEP_SCREEN_ON, чтобы удерживать экран постоянно включеным
-                    // иначе не сработает кнопка гарнитуры которая запускает таймер
-                    context.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                }
-                "Репитер (1 Канал)" -> {
-                    // Устанавливаем флаг FLAG_KEEP_SCREEN_ON, чтобы удерживать экран постоянно включеным
-                    // иначе не сработает кнопка гарнитуры запускающая VOX систему если будет использоваться кнопка
-                    context.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                }
-                "Супертелефон" -> {
-                    // Сбрасываем флаг FLAG_KEEP_SCREEN_ON, чтобы вернуться к системным настройкам таймаута экрана
-                    context.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                }
+            if (screenState.connectType == "Репитер (2 Канала)") {
+                // Устанавливаем флаг FLAG_KEEP_SCREEN_ON, чтобы удерживать экран постоянно включеным
+                context.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            } else {
+                // Сбрасываем флаг FLAG_KEEP_SCREEN_ON для всех остальных типов подключения
+                context.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             }
         }
 

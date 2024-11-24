@@ -15,10 +15,6 @@ interface PreferencesRepository {
     fun getFlashSignal(): Boolean
     fun setFlashSignal(enabled: Boolean)
 
-    fun getDtmModuleFlow(): Flow<Boolean>
-    fun getDtmModule(): Boolean
-    fun setDtmModule(enabled: Boolean)
-
     fun getDelayMusicFlow(): Flow<Long>
     fun getDelayMusic(): Long
     fun setDelayMusic(ms: Long)
