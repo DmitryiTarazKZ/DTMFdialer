@@ -1,7 +1,6 @@
 package com.mcal.dtmf.ui.help
 
 import android.webkit.WebView
-import android.widget.Toast
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -16,11 +15,6 @@ import cafe.adriel.voyager.core.screen.uniqueScreenKey
 import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.currentOrThrow
 import com.mcal.dtmf.navigator.AppScreen
-import com.mcal.dtmf.utils.Utils.Companion.copyFileFromAssets
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-
 
 class HelpScreen : AppScreen {
     override val key: ScreenKey
@@ -69,19 +63,6 @@ class HelpScreen : AppScreen {
                                                           contentDisposition,
                                                           mimetype,
                                                           contentLength ->
-                                if (url.contains("file:///android_asset/")) {
-                                    Toast.makeText(
-                                        webView.context,
-                                        "Файл был сохранен в загрузки",
-                                        Toast.LENGTH_LONG
-                                    ).show()
-                                    CoroutineScope(Dispatchers.IO).launch {
-                                        copyFileFromAssets(
-                                            webView.context,
-                                            url.replace("file:///android_asset/", "")
-                                        )
-                                    }
-                                }
                             }
                             webView.loadUrl("file:///android_asset/help/index.html")
                         },

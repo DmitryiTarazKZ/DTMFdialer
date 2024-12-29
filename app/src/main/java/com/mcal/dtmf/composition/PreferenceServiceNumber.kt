@@ -18,7 +18,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 @Composable
-fun PreferencePhoneTextField(
+fun PreferenceServiceNumber(
     text: String,
     value: String,
     onValueChange: (String) -> Unit,

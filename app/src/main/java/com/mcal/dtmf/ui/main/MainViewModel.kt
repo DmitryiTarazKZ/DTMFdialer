@@ -4,7 +4,9 @@ import android.telecom.CallAudioState
 import cafe.adriel.voyager.core.model.ScreenModel
 import cafe.adriel.voyager.core.model.screenModelScope
 import com.mcal.dtmf.data.model.domain.main.MainScreenState
+import com.mcal.dtmf.data.repositories.main.LogLevel
 import com.mcal.dtmf.data.repositories.main.MainRepository
+import com.mcal.dtmf.utils.LogManager
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -26,7 +28,7 @@ class MainViewModel(
     private val _screenState = MutableStateFlow(
         MainScreenState(
             isConnect = mainRepository.getIsConnect() ?: false,
-            connectType = mainRepository.getConnType(),
+            modeSelection = mainRepository.getModeSelection(),
             input = mainRepository.getInput() ?: "",
             numberA = mainRepository.getNumberA(),
             numberB = mainRepository.getNumberB(),
@@ -116,10 +118,10 @@ class MainViewModel(
                 )
             }
         }.launchIn(screenModelScope)
-        mainRepository.getConnTypeFlow().map { connType ->
+        mainRepository.getModeSelectionFlow().map { modeSelection ->
             _screenState.update {
                 it.copy(
-                    connectType = connType
+                    modeSelection = modeSelection
                 )
             }
         }.launchIn(screenModelScope)
@@ -151,10 +153,10 @@ class MainViewModel(
                 )
             }
         }.launchIn(screenModelScope)
-        mainRepository.getOutput1Flow().map { outputFrequency ->
+        mainRepository.getOutput1Flow().map { outputFrequency1 ->
             _screenState.update {
                 it.copy(
-                    outputFrequency = outputFrequency
+                    outputFrequency1 = outputFrequency1
                 )
             }
         }.launchIn(screenModelScope)
@@ -162,25 +164,41 @@ class MainViewModel(
     fun onClickButton(input: String, key: Char) {
         mainRepository.clickKey(input, key)
     }
+
     fun flashLight() {
-        mainRepository.setStartFlashlight(!mainRepository.getStartFlashlight())
+        mainRepository.setStartDtmf(!mainRepository.getStartDtmf())
     }
+
+    fun flashLightOn(frequency1: Float, frequency2: Float) {
+       if (frequency1 == frequency2) {
+           if (mainRepository.getFlashlight() == null || mainRepository.getFlashlight() == false) {
+               mainRepository.setFlashlight(true)
+           }
+       } else {
+           if (mainRepository.getFlashlight() == true) {
+               mainRepository.setFlashlight(false)
+           }
+       }
+    }
+
     fun speaker() {
-        if (checkSpeaker(mainRepository.getCallAudioRoute())) {
+        val isSpeakerEnabled = checkSpeaker(mainRepository.getCallAudioRoute())
+        val isHeadphoneConnected = mainRepository.getIsConnect() ?: false
+        val audioRoute = mainRepository.getCallAudioRoute()
+
+        if (isHeadphoneConnected && audioRoute == CallAudioState.ROUTE_SPEAKER) {
             mainRepository.disableSpeaker()
-        } else {
+        } else if (!isSpeakerEnabled && !isHeadphoneConnected) {
             mainRepository.enableSpeaker()
+        } else if (isSpeakerEnabled) {
+            mainRepository.disableSpeaker()
         }
     }
-
-    // Включение громкоговорителя в режиме cупертелефон если кабель не используется
-    fun speakerOn() {
-            mainRepository.enableSpeaker()
-    }
-
-
 }
 private fun checkSpeaker(audioRoute: Int): Boolean {
     return audioRoute == CallAudioState.ROUTE_SPEAKER
 }
+
+
+
 

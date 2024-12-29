@@ -37,11 +37,11 @@ import com.mcal.dtmf.R
  * 3000 / 300 = 10
  */
 @Composable
-fun PreferencePlusMinus(
+fun PreferenceVoxThreshold(
     text: String,
     value: Long,
-    period: Long = 10L,
-    max: Long = 500L,
+    period: Long = 100L,
+    max: Long = 10000L,
     onValueChange: (Long) -> Unit,
     summary: String
 ) {
@@ -62,18 +62,18 @@ fun PreferencePlusMinus(
         Column(
             modifier = Modifier.weight(1f),
         ) {
-        Text(
-            modifier = Modifier.fillMaxWidth(),
-            text = text,
-            style = TextStyle(
-                fontWeight = FontWeight(400),
-                textAlign = TextAlign.Start,
-                fontSize = 18.sp
-            )
-        )
             Text(
                 modifier = Modifier.fillMaxWidth(),
-                text = "$localeValue милисекунд",
+                text = text,
+                style = TextStyle(
+                    fontWeight = FontWeight(400),
+                    textAlign = TextAlign.Start,
+                    fontSize = 18.sp
+                )
+            )
+            Text(
+                modifier = Modifier.fillMaxWidth(),
+                text = "$localeValue единиц",
                 style = TextStyle(
                     fontWeight = FontWeight(400),
                     textAlign = TextAlign.Start,
@@ -103,7 +103,7 @@ fun PreferencePlusMinus(
                                 if (localeValueLong in period..max) {
                                     plusEnabled = true
                                     localeValueLong -= period
-                                    if (localeValueLong == 150L) {
+                                    if (localeValueLong == 100L) {
                                         minusEnabled = false
                                     }
                                     localeValue = localeValueLong.toString()
@@ -119,7 +119,7 @@ fun PreferencePlusMinus(
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxWidth(),
-                            text = "${localeValue.toFloat()} ms",
+                            text = "${localeValue.toFloat()} ед",
                             style = TextStyle(
                                 fontWeight = FontWeight(400),
                                 textAlign = TextAlign.Center,

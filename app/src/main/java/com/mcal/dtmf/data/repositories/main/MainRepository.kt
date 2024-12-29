@@ -69,27 +69,25 @@ interface MainRepository {
 
     fun clickKey(input: String, key: Char?)
 
-    fun startDtmfIfNotRunning()
-
     fun stopDtmf()
 
     fun wakeUpScreen(context: Context)
 
-    fun getStartFlashlightFlow(): Flow<Boolean>
-    fun getStartFlashlight(): Boolean
-    fun setStartFlashlight(enabled: Boolean, hasProblem: Boolean = false)
+    fun getStartDtmfFlow(): Flow<Boolean>
+    fun getStartDtmf(): Boolean
+    fun setStartDtmf(enabled: Boolean, hasProblem: Boolean = false)
 
     fun getServiceNumberFlow(): Flow<String>
     fun getServiceNumber(): String
     fun setServiceNumber(number: String)
 
-    fun getPlayMusicFlow(): Flow<Boolean>
-    fun getPlayMusic(): Boolean
-    fun setPlayMusic(enabled: Boolean)
-
     fun getFlashSignalFlow(): Flow<Boolean>
     fun getFlashSignal(): Boolean
     fun setFlashSignal(enabled: Boolean)
+
+    fun getErrorControlFlow(): Flow<Boolean>
+    fun getErrorControl(): Boolean
+    fun setErrorControl(enabled: Boolean)
 
     fun getNumberAFlow(): Flow<String>
     fun getNumberA(): String
@@ -107,21 +105,19 @@ interface MainRepository {
     fun getNumberD(): String
     fun setNumberD(number: String)
 
-    fun getConnTypeFlow(): Flow<String>
-    fun getConnType(): String
-    fun setConnType(value: String)
+    fun getModeSelectionFlow(): Flow<String>
+    fun getModeSelection(): String
+    fun setModeSelection(value: String)
 
     fun getOutput1Flow(): Flow<Float>
     fun getOutput1(): Float
-    fun setOutput1(outputFrequency: Float)
+    fun setOutput1(outputFrequency1: Float)
 
     fun startDtmf()
 
     fun selectSimCard(slot1: String?, slot2: String?, phoneAccount: Int)
 
-    fun networNone()
-
-    fun noSim()
+    fun speakText(text: String)
 
     suspend fun speakSuperTelephone()
 }

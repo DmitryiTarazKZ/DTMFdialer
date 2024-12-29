@@ -9,9 +9,9 @@ import org.koin.core.component.inject
 
 // главный массив по которому происходит сравнение частот и присвоение соответствующего символа
 // Эти величины от 45 до 106 соответствуют вертикальным строкам отрисовки спектра
-// в MainScreen участки попадающие в дтмф диапазон выделены красным (в конце)
+// в MainScreen участки попадающие в дтмф диапазон выделены синим
 class StatelessRecognizer(private val spectrum: Spectrum): KoinComponent {
-    private val mainRepository: MainRepository by inject() // инжектирование переменной в репозиторий
+    private val mainRepository: MainRepository by inject() // инжектирование репозитория
     private val tones = mutableListOf(
         Tone(45, 77, '1'),// 45=697гц  77=1209гц
         Tone(45, 86, '2'),// 45=697гц  86=1336гц

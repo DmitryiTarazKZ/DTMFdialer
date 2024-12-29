@@ -31,17 +31,14 @@ import androidx.compose.ui.unit.sp
 import com.mcal.dtmf.R
 
 /**
- * Правило: максимальное значение должно делиться на период без остатка
- *
- * 5000 / 500 = 10
- * 3000 / 300 = 10
+Настройка времени удержиания вспышки по превышению порогового значения
  */
 @Composable
-fun PreferencePlusMinus2(
+fun PreferenceVoxHold(
     text: String,
     value: Long,
-    period: Long = 100L,
-    max: Long = 10000L,
+    period: Long = 10L,
+    max: Long = 1000L,
     onValueChange: (Long) -> Unit,
     summary: String
 ) {
@@ -73,7 +70,7 @@ fun PreferencePlusMinus2(
             )
             Text(
                 modifier = Modifier.fillMaxWidth(),
-                text = "$localeValue единиц",
+                text = "$localeValue милисекунд",
                 style = TextStyle(
                     fontWeight = FontWeight(400),
                     textAlign = TextAlign.Start,
@@ -103,7 +100,7 @@ fun PreferencePlusMinus2(
                                 if (localeValueLong in period..max) {
                                     plusEnabled = true
                                     localeValueLong -= period
-                                    if (localeValueLong == 100L) {
+                                    if (localeValueLong == 0L) {
                                         minusEnabled = false
                                     }
                                     localeValue = localeValueLong.toString()
@@ -119,7 +116,7 @@ fun PreferencePlusMinus2(
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxWidth(),
-                            text = "${localeValue.toFloat()} ед",
+                            text = "${localeValue.toFloat()} ms",
                             style = TextStyle(
                                 fontWeight = FontWeight(400),
                                 textAlign = TextAlign.Center,

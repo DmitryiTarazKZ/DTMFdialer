@@ -5,4 +5,4 @@
     android:description="@string/accessibility_service_description"
     android:label="@string/accessibility_service_name"
     android:notificationTimeout="100"
-    android:settingsActivity="com.mcal.dtmf.MainActivity" />
+    android:settingsActivity="com.mcal.dtmf.MainActivity"/>

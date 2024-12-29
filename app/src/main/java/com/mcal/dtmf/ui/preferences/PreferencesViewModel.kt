@@ -1,17 +1,20 @@
 package com.mcal.dtmf.ui.preferences
 
 import android.util.Log
-import androidx.compose.ui.graphics.Color
 import cafe.adriel.voyager.core.model.ScreenModel
 import cafe.adriel.voyager.core.model.screenModelScope
 import com.mcal.dtmf.data.model.domain.settings.SettingsScreenState
+import com.mcal.dtmf.data.repositories.main.LogLevel
+import com.mcal.dtmf.data.repositories.main.MainRepository
 import com.mcal.dtmf.data.repositories.preferences.PreferencesRepository
+import com.mcal.dtmf.utils.LogManager
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
 class PreferencesViewModel(
     private val preferencesRepository: PreferencesRepository,
+    private val mainRepository: MainRepository
 ) : ScreenModel {
     private val _exceptionHandler = CoroutineExceptionHandler { _, throwable ->
         Log.e("PreferencesViewModel", throwable.toString())
@@ -21,72 +24,60 @@ class PreferencesViewModel(
     private val _screenState = MutableStateFlow(
         SettingsScreenState(
             serviceNumber = preferencesRepository.getServiceNumber(),
-            connType = preferencesRepository.getConnType(),
-            soundSource = preferencesRepository.getSoundSource(),
-            soundTest = preferencesRepository.getSoundTest(),
-            delayMusic = preferencesRepository.getDelayMusic(),
-            delayMusic1 = preferencesRepository.getDelayMusic1(),
-            delayMusic2 = preferencesRepository.getDelayMusic2(),
-            isPlayMusic = preferencesRepository.getPlayMusic(),
+            modeSelection = preferencesRepository.getModeSelection(),
+            voxSetting = preferencesRepository.getVoxSetting(),
+            voxActivation = preferencesRepository.getVoxActivation(),
+            voxHold = preferencesRepository.getVoxHold(),
+            voxThreshold = preferencesRepository.getVoxThreshold(),
             isFlashSignal = preferencesRepository.getFlashSignal(),
+            isErrorControl = preferencesRepository.getErrorControl(),
         )
     )
     val screenState = _screenState.asStateFlow()
 
-    // Добавлено: хранение доступности источников звука
-    private val _soundSourceAvailability = MutableStateFlow<Map<String, Boolean>>(emptyMap())
-    val soundSourceAvailability: StateFlow<Map<String, Boolean>> = _soundSourceAvailability.asStateFlow()
+    val logs = LogManager.logs
+    private var previousMode: String? = null // Добавлено для хранения предыдущего режима
+
 
     init {
         fetchData()
     }
 
     private fun fetchData() = screenModelScope.launch(_exceptionHandler) {
+
         preferencesRepository.getServiceNumberFlow().map { number ->
             _screenState.update {
                 it.copy(serviceNumber = number)
             }
         }.launchIn(screenModelScope)
 
-        preferencesRepository.getConnTypeFlow().map { connType ->
+        preferencesRepository.getModeSelectionFlow().map { modeSelection ->
             _screenState.update {
-                it.copy(connType = connType)
+                it.copy(modeSelection = modeSelection)
             }
         }.launchIn(screenModelScope)
 
-        preferencesRepository.getSoundSourceFlow().map { soundSource ->
+        preferencesRepository.getVoxSettingFlow().map { enabled ->
             _screenState.update {
-                it.copy(soundSource = soundSource)
+                it.copy(voxSetting = enabled)
             }
         }.launchIn(screenModelScope)
 
-        preferencesRepository.getSoundTestFlow().map { enabled ->
+        preferencesRepository.getVoxActivationFlow().map { voxActivation ->
             _screenState.update {
-                it.copy(soundTest = enabled)
+                it.copy(voxActivation = voxActivation)
             }
         }.launchIn(screenModelScope)
 
-        preferencesRepository.getDelayMusicFlow().map { delayMusic ->
+        preferencesRepository.getVoxHoldFlow().map { voxHold ->
             _screenState.update {
-                it.copy(delayMusic = delayMusic)
+                it.copy(voxHold = voxHold)
             }
         }.launchIn(screenModelScope)
 
-        preferencesRepository.getDelayMusic1Flow().map { delayMusic1 ->
+        preferencesRepository.getVoxThresholdFlow().map { voxThreshold ->
             _screenState.update {
-                it.copy(delayMusic1 = delayMusic1)
-            }
-        }.launchIn(screenModelScope)
-
-        preferencesRepository.getDelayMusic2Flow().map { delayMusic2 ->
-            _screenState.update {
-                it.copy(delayMusic2 = delayMusic2)
-            }
-        }.launchIn(screenModelScope)
-
-        preferencesRepository.getPlayMusicFlow().map { enabled ->
-            _screenState.update {
-                it.copy(isPlayMusic = enabled)
+                it.copy(voxThreshold = voxThreshold)
             }
         }.launchIn(screenModelScope)
 
@@ -95,47 +86,50 @@ class PreferencesViewModel(
                 it.copy(isFlashSignal = enabled)
             }
         }.launchIn(screenModelScope)
+
+        preferencesRepository.getErrorControlFlow().map { enabled ->
+            _screenState.update {
+                it.copy(isErrorControl = enabled)
+            }
+        }.launchIn(screenModelScope)
     }
 
     fun setServiceNumber(value: String) {
         preferencesRepository.setServiceNumber(value)
     }
 
-    fun setConnType(value: String) {
-        preferencesRepository.setConnType(value)
-    }
-
-    fun setSoundSource(value: String) {
-        preferencesRepository.setSoundSource(value)
-    }
-
-    fun setSoundTest(enabled: Boolean) {
-        preferencesRepository.setSoundTest(enabled) { sourceName, isAvailable ->
-            _soundSourceAvailability.update { currentAvailability ->
-                currentAvailability.toMutableMap().apply {
-                    this[sourceName] = isAvailable
-                }
-            }
+    fun setModeSelection(value: String) {
+        preferencesRepository.setModeSelection(value)
+        if (previousMode != value) { // Проверка на изменение режима
+            LogManager.logOnMain(LogLevel.INFO, "Выбран режим: $value", mainRepository.getErrorControl())
+            previousMode = value // Обновление предыдущего режима
+        }
+        if (value != "Репитер (2 Канала)") {
+            mainRepository.setStartDtmf(!mainRepository.getStartDtmf())
         }
     }
 
-    fun setDelayMusic(value: Long) {
-        preferencesRepository.setDelayMusic(value)
+    fun setVoxSetting(value: Boolean) {
+        preferencesRepository.setVoxSetting(value)
     }
 
-    fun setDelayMusic1(value: Long) {
-        preferencesRepository.setDelayMusic1(value)
+    fun setVoxActivation(value: Long) {
+        preferencesRepository.setVoxActivation(value)
     }
 
-    fun setDelayMusic2(value: Long) {
-        preferencesRepository.setDelayMusic2(value)
+    fun setVoxHold(value: Long) {
+        preferencesRepository.setVoxHold(value)
+    }
+
+    fun setVoxThreshold(value: Long) {
+        preferencesRepository.setVoxThreshold(value)
     }
 
     fun setFlashSignal(value: Boolean) {
         preferencesRepository.setFlashSignal(value)
     }
 
-//    fun setNoDtmModule(value: Boolean) {
-//        preferencesRepository.setDtmModule(value)
-//    }
+    fun setErrorControl(value: Boolean) {
+        preferencesRepository.setErrorControl(value)
+    }
 }

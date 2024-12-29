@@ -7,6 +7,7 @@ import android.widget.Toast
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -37,10 +38,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Color.Companion.Blue
+import androidx.compose.ui.graphics.Color.Companion.Red
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
@@ -64,15 +72,19 @@ class MainScreen : AppScreen {
         val navigator = LocalNavigator.currentOrThrow
         val viewModel = getScreenModel<MainViewModel>()
         val screenState by viewModel.screenState.collectAsState()
-        val context = LocalContext.current as Activity
+        val context = LocalContext.current
+        var sliderPosition by remember { mutableFloatStateOf(112f) }
+        val currentContext = rememberUpdatedState(context)
 
-        LaunchedEffect(screenState.connectType) {
-            if (screenState.connectType == "Репитер (2 Канала)") {
-                // Устанавливаем флаг FLAG_KEEP_SCREEN_ON, чтобы удерживать экран постоянно включеным
-                context.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            } else {
-                // Сбрасываем флаг FLAG_KEEP_SCREEN_ON для всех остальных типов подключения
-                context.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        LaunchedEffect(screenState.modeSelection) {
+            (currentContext.value as? Activity)?.let { activity ->
+                if (screenState.modeSelection == "Репитер (2 Канала)") {
+                    // Устанавливаем флаг FLAG_KEEP_SCREEN_ON, чтобы удерживать экран постоянно включеным
+                    activity.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                } else {
+                    // Сбрасываем флаг FLAG_KEEP_SCREEN_ON для всех остальных типов подключения
+                    activity.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                }
             }
         }
 
@@ -81,7 +93,7 @@ class MainScreen : AppScreen {
                 TopAppBar(
                     title = {
                         Text(
-                            text = screenState.connectType,
+                            text = screenState.modeSelection,
                         )
                     },
 
@@ -122,11 +134,12 @@ class MainScreen : AppScreen {
                                 .weight(1f)
                                 .height(54.dp)
                         ) {
-                            val text = if (screenState.timer == 0 && screenState.input == "") {
-                                "Отключен"
-                            } else if (screenState.timer > 0 && screenState.input == "") {
-                                "Включен"
-                            } else screenState.input
+                            val text = when {
+                                screenState.modeSelection == "Частотомер" -> String.format("%.3f Гц", screenState.outputFrequency1)
+                                screenState.timer == 0 && screenState.input == "" -> "Отключен"
+                                screenState.timer > 0 && screenState.input == "" -> "Включен"
+                                else -> screenState.input
+                            }
                             Text(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -139,51 +152,34 @@ class MainScreen : AppScreen {
                                 )
                             )
                         }
-                        Spacer(modifier = Modifier.width(5.dp))
 
-                        // если режим супертелефон и не отсутствие звонка включаем громкоговоритель
-                        if ((screenState.connectType == "Супертелефон") && screenState.callState != Call.STATE_DISCONNECTED) {
-                            viewModel.speakerOn()
-                        }
-
-                        // Выключатель громкоговорителя
-                        Card(
-                            modifier = Modifier.size(54.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .clickable {
-                                        if (screenState.callState != Call.STATE_DISCONNECTED) {
-                                            viewModel.speaker()
-                                        } else {
-                                            Toast
-                                                .makeText(
-                                                    context,
+                        if (screenState.modeSelection != "Частотомер") {
+                            Spacer(modifier = Modifier.width(5.dp))
+                            // Выключатель громкоговорителя
+                            Card(modifier = Modifier.size(54.dp)) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .clickable {
+                                            if (screenState.callState != Call.STATE_DISCONNECTED) {
+                                                viewModel.speaker()
+                                            } else {
+                                                Toast.makeText(
+                                                    currentContext.value,
                                                     "Нет активного вызова",
                                                     Toast.LENGTH_SHORT
-                                                )
-                                                .show()
+                                                ).show()
+                                            }
                                         }
-                                    }
-                                    .background(
-                                        if (screenState.isSpeakerOn) {
-                                            Color(0xFFE72929)
-                                        } else {
-                                            Color(0xFF2196F3)
-                                        }
-                                    ),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                if (screenState.isSpeakerOn) {
+                                        .background(
+                                            if (screenState.isSpeakerOn) Color(0xFFE72929) else Color(0xFF2196F3)
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
                                     Icon(
-                                        painter = painterResource(R.drawable.ic_speaker_on),
-                                        contentDescription = null,
-                                        tint = Color.White
-                                    )
-                                } else {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_speaker_off),
+                                        painter = painterResource(
+                                            if (screenState.isSpeakerOn) R.drawable.ic_speaker_on else R.drawable.ic_speaker_off
+                                        ),
                                         contentDescription = null,
                                         tint = Color.White
                                     )
@@ -191,7 +187,43 @@ class MainScreen : AppScreen {
                             }
                         }
                     }
+
                     Spacer(modifier = Modifier.height(5.dp))
+
+                    if (screenState.modeSelection == "Частотомер") {
+                        Row(
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            // основное поле вывода частоты по позиции ползунка
+                            val frequency1 = screenState.outputFrequency1
+                            val frequency2 = sliderPosition.toInt() * 15.625f
+                            val text = String.format("%.3f Гц", frequency2)
+                            viewModel.flashLightOn(frequency1, frequency2)
+
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .weight(1f)
+                                    .height(54.dp)
+                                    .background(if (frequency1 == frequency2) Red else Color.Transparent)
+                            ) {
+                                val color = Blue
+                                Text(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 5.dp),
+                                    text = text,
+                                    style = TextStyle(
+                                        fontSize = 40.sp,
+                                        color = color,
+                                        textAlign = TextAlign.Center
+                                    )
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(5.dp))
+                    }
+
                     Row(
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -217,7 +249,7 @@ class MainScreen : AppScreen {
                                             }
 
                                             KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                                                Color.Blue
+                                                Blue
                                             }
 
                                             else -> {
@@ -228,22 +260,23 @@ class MainScreen : AppScreen {
                                 contentAlignment = Alignment.Center
                             ) {
 
-                              if(screenState.isConnect) {
-                                  Icon(
-                                      painter = painterResource(R.drawable.ic_headset),
-                                      contentDescription = null,
-                                      tint = Color.White
-                                  )
-                              } else {
-                                  Icon(
-                                  painter = painterResource(R.drawable.power_settings),
-                                  contentDescription = null,
-                                  tint = Color.White
-                              )
-                              }
+                                if(screenState.isConnect) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_headset),
+                                        contentDescription = null,
+                                        tint = Color.White
+                                    )
+                                } else {
+                                    Icon(
+                                        painter = painterResource(R.drawable.power_settings),
+                                        contentDescription = null,
+                                        tint = Color.White
+                                    )
+                                }
                             }
                         }
                         Spacer(modifier = Modifier.width(5.dp))
+                        if (screenState.modeSelection != "Частотомер") {
                             // индикатор подключения зарядного устройства
                             Card(
                                 modifier = Modifier.size(54.dp)
@@ -271,8 +304,8 @@ class MainScreen : AppScreen {
 
                                 }
                             }
-                            Spacer(modifier = Modifier.width(5.dp))
-
+                            Spacer(modifier = Modifier.width(5.dp))}
+                        if (screenState.modeSelection != "Частотомер") {
                             // индикатор направления вызова
                             Card(
                                 modifier = Modifier.size(54.dp)
@@ -287,7 +320,7 @@ class MainScreen : AppScreen {
                                                 }
 
                                                 Call.STATE_RINGING -> {
-                                                    Color.Blue
+                                                    Blue
                                                 }
 
                                                 Call.STATE_ACTIVE -> {
@@ -323,8 +356,9 @@ class MainScreen : AppScreen {
 
                                 }
                             }
-                            Spacer(modifier = Modifier.width(5.dp))
+                            Spacer(modifier = Modifier.width(5.dp))}
 
+                        if (screenState.modeSelection != "Частотомер") {
                             // индикатор включения вспышки
                             Card(
                                 modifier = Modifier.size(54.dp)
@@ -356,7 +390,7 @@ class MainScreen : AppScreen {
 
                                 }
                             }
-                            Spacer(modifier = Modifier.width(5.dp))
+                            Spacer(modifier = Modifier.width(5.dp))}
 
 
                         // вывод окна спектра
@@ -365,212 +399,73 @@ class MainScreen : AppScreen {
                                 .fillMaxWidth()
                                 .height(64.dp),
                             spectrum = screenState.spectrum,
+                            modeSelection = screenState.modeSelection,
+                            sliderPosition = sliderPosition, // Передаем значение здесь
+                            onSliderPositionChange = { newPosition ->
+                                sliderPosition = newPosition // Обновляем значение sliderPosition
+                            }
                         )
                     }
 
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(4),
-                        content = {
-                            items(screenState.keys) { key ->
-                                val color = when {
-                                    screenState.key == key -> {
-                                        Color.DarkGray
+                    if (screenState.modeSelection != "Частотомер") {
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(4),
+                            content = {
+                                items(screenState.keys) { key ->
+                                    val color = when (key) {
+                                        screenState.key -> Color.DarkGray
+                                        in "ABCD".toCharArray() -> Color(0xFF2196F3)
+                                        '#' -> Color(0xFFE72929)
+                                        '*' -> Color(0xFF007F73)
+                                        else -> MaterialTheme.colorScheme.primary
                                     }
 
-                                    "ABCD".contains(key) -> {
-                                        Color(0xFF2196F3)
-                                    }
-
-                                    key == '#' -> {
-                                        Color(0xFFE72929)
-                                    }
-
-                                    key == '*' -> {
-                                        Color(0xFF007F73)
-                                    }
-
-                                    else -> {
-                                        MaterialTheme.colorScheme.primary
-                                    }
-                                }
-
-                                // ОТРИСОВКА КНОПОК
-                                Button(
-                                    modifier = Modifier
-                                        .padding(4.dp)
-                                        .size(54.dp),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = color
-                                    ),
-                                    onClick = {
-                                        viewModel.onClickButton(screenState.input, key)
-                                    }
-                                ) {
-                                    Text(
-                                        text = key.toString(),
-                                        style = TextStyle(
-                                            fontSize = 24.sp,
-                                            textAlign = TextAlign.Center
+                                    // ОТРИСОВКА КНОПОК
+                                    Button(
+                                        modifier = Modifier
+                                            .padding(4.dp)
+                                            .size(54.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = color
+                                        ),
+                                        onClick = {
+                                            viewModel.onClickButton(screenState.input, key)
+                                        }
+                                    ) {
+                                        Text(
+                                            text = key.toString(),
+                                            style = TextStyle(
+                                                fontSize = 24.sp,
+                                                textAlign = TextAlign.Center
+                                            )
                                         )
-                                    )
+                                    }
                                 }
                             }
-                        }
-                    )
-
-
-                    if (screenState.numberA.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(0.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Card(
-                                modifier = Modifier.size(54.dp)
-                            ) {
-                                Text(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 5.dp),
-                                    text = "A",
-                                    style = TextStyle(
-                                        fontSize = 40.sp,
-                                        textAlign = TextAlign.Center
-                                    )
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(5.dp))
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(54.dp)
-                            ) {
-                                Text(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 5.dp),
-                                    text = screenState.numberA,
-                                    style = TextStyle(
-                                        fontSize = 40.sp,
-                                        textAlign = TextAlign.Center
-                                    )
-                                )
-                            }
-                        }
+                        )
                     }
 
-                    if (screenState.numberB.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(5.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Card(
-                                modifier = Modifier.size(54.dp)
-                            ) {
-                                Text(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 5.dp),
-                                    text = "B",
-                                    style = TextStyle(
-                                        fontSize = 40.sp,
-                                        textAlign = TextAlign.Center
-                                    )
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(5.dp))
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(54.dp)
-                            ) {
-                                Text(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 5.dp),
-                                    text = screenState.numberB,
-                                    style = TextStyle(
-                                        fontSize = 40.sp,
-                                        textAlign = TextAlign.Center
-                                    )
-                                )
-                            }
-                        }
-                    }
-
-                    if (screenState.numberC.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(5.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Card(
-                                modifier = Modifier.size(54.dp)
-                            ) {
-                                Text(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 5.dp),
-                                    text = "C",
-                                    style = TextStyle(
-                                        fontSize = 40.sp,
-                                        textAlign = TextAlign.Center
-                                    )
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(5.dp))
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(54.dp)
-                            ) {
-                                Text(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 5.dp),
-                                    text = screenState.numberC,
-                                    style = TextStyle(
-                                        fontSize = 40.sp,
-                                        textAlign = TextAlign.Center
-                                    )
-                                )
-                            }
-                        }
-                    }
-
-                    if (screenState.numberD.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(5.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Card(
-                                modifier = Modifier.size(54.dp)
-                            ) {
-                                Text(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 5.dp),
-                                    text = "D",
-                                    style = TextStyle(
-                                        fontSize = 40.sp,
-                                        textAlign = TextAlign.Center
-                                    )
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(5.dp))
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(54.dp)
-                            ) {
-                                Text(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 5.dp),
-                                    text = screenState.numberD,
-                                    style = TextStyle(
-                                        fontSize = 40.sp,
-                                        textAlign = TextAlign.Center
-                                    )
-                                )
+                    if (screenState.modeSelection != "Частотомер") {
+                        listOf("A" to screenState.numberA, "B" to screenState.numberB, "C" to screenState.numberC, "D" to screenState.numberD).forEach { (label, number) ->
+                            if (number.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(5.dp))
+                                Row(modifier = Modifier.fillMaxWidth()) {
+                                    Card(modifier = Modifier.size(54.dp)) {
+                                        Text(
+                                            modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+                                            text = label,
+                                            style = TextStyle(fontSize = 40.sp, textAlign = TextAlign.Center)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(5.dp))
+                                    Card(modifier = Modifier.fillMaxWidth().height(54.dp)) {
+                                        Text(
+                                            modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+                                            text = number,
+                                            style = TextStyle(fontSize = 40.sp, textAlign = TextAlign.Center)
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -579,11 +474,13 @@ class MainScreen : AppScreen {
         )
     }
 
-    //отрисовка спектра разными цветами
     @Composable
     fun SpectrumCanvas(
         modifier: Modifier = Modifier,
         spectrum: Spectrum?,
+        modeSelection: String,
+        sliderPosition: Float,
+        onSliderPositionChange: (Float) -> Unit
     ) {
         Card(
             modifier = Modifier
@@ -593,22 +490,37 @@ class MainScreen : AppScreen {
             spectrum?.let { spectrum ->
                 Canvas(
                     modifier = modifier.fillMaxSize()
+                        .pointerInput(Unit) {
+                            detectDragGestures { change, _ ->
+                                change.consume()
+                                val newPosition = change.position.x.coerceIn(0f, 500f)
+                                onSliderPositionChange(newPosition)
+                            }
+                        }
                 ) {
-                    //цикл отрисовки вертикальных полос в спектре
+                    // цикл отрисовки вертикальных полос в спектре
                     val canvasHeight = size.height
                     for (i in 0 until 500) {
                         val downY = (canvasHeight - (spectrum[i] * canvasHeight))
                         val color = when (i) {
-                            // значение * 15.625 это частоты попадающие в двухтональный набор
-                            in 40..65, in 75..110 -> Color.Blue
+                            in 40..65, in 75..110 -> Blue
                             else -> Color.Black
                         }
-                        // отрисовка вертикальных линий в спектре
                         drawLine(
                             color = color,
                             start = Offset(i.toFloat(), downY.toFloat()),
                             end = Offset(i.toFloat(), canvasHeight),
                             strokeWidth = 1f,
+                        )
+                    }
+
+                    // Отрисовка ползунка, если режим "Частотомер"
+                    if (modeSelection == "Частотомер") {
+                        drawLine(
+                            color = Red,
+                            start = Offset(sliderPosition, 0f),
+                            end = Offset(sliderPosition, canvasHeight),
+                            strokeWidth = 2f,
                         )
                     }
                 }

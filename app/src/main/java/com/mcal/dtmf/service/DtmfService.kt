@@ -17,10 +17,11 @@ import android.telephony.SubscriptionManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.mcal.dtmf.R
+import com.mcal.dtmf.data.repositories.main.LogLevel
 import com.mcal.dtmf.data.repositories.main.MainRepository
+import com.mcal.dtmf.utils.LogManager
 import com.mcal.dtmf.utils.Utils.Companion.getCurrentBatteryLevel
 import com.mcal.dtmf.utils.Utils.Companion.getCurrentBatteryTemperature
-import com.mcal.dtmf.utils.Utils.Companion.getCurrentBatteryVoltage
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 
@@ -52,6 +53,7 @@ class DtmfService : Service(), KoinComponent {
 
     private fun startCall(isButtonPressed: Boolean, sim: Int) {
         mainRepository.getInput()?.let { phone ->
+
             var slot1: String? = "Нет сигнала"
             var slot2: String? = "Нет сигнала"
 
@@ -64,7 +66,9 @@ class DtmfService : Service(), KoinComponent {
             val subscriptions = subscriptionManager.activeSubscriptionInfoList
 
             if (subscriptions == null || subscriptions.isEmpty()) {
-                mainRepository.noSim()
+                LogManager.logOnMain(LogLevel.ERROR, "startCall() Нет действующих сим карт", mainRepository.getErrorControl())
+                mainRepository.speakText("В устройстве нет ни одной доступной сим карты")
+                mainRepository.setInput("")
                 return
             }
 
@@ -82,25 +86,31 @@ class DtmfService : Service(), KoinComponent {
             val phoneAccountHandles = telecomManager.callCapablePhoneAccounts
 
             if (slot1 == "Нет сигнала" && slot2 == "Нет сигнала") {
-                mainRepository.networNone()
+                LogManager.logOnMain(LogLevel.ERROR, "startCall() Нет сигнала сотовой сети", mainRepository.getErrorControl())
+                mainRepository.speakText("Нет сигнала сотовой сети. Вызов не возможен")
+                mainRepository.setInput("")
             } else {
                 val phoneAccountCount = phoneAccountHandles.size
                 if (phoneAccountCount > 1 || isButtonPressed) {
                     if (isButtonPressed) {
                         mainRepository.wakeUpScreen(this)
-                        // Совершить вызов с выбранной SIM-карты
-                        val intent = Intent(Intent.ACTION_CALL).apply {
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            data = Uri.parse("tel:$phone")
-                            putExtra(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, phoneAccountHandles[sim])
+                        // Проверка на null или пустую строку для phone
+                        if (!phone.isNullOrEmpty()) {
+                            val intent = Intent(Intent.ACTION_CALL).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                data = Uri.parse("tel:$phone")
+                                putExtra(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, phoneAccountHandles[sim])
+                            }
+                            startActivity(intent)
+                        } else {
+                            LogManager.logOnMain(LogLevel.ERROR, "startCall() Предотвращен вызов с пустым номером", mainRepository.getErrorControl())
                         }
-                        startActivity(intent)
                     } else {
-                        // Активны обе сим-карты, предлагаем выбрать с какой позвонить
+                        LogManager.logOnMain(LogLevel.INFO, "startCall() Вызов selectSimCard() Активны обе сим-карты, предлагаем выбрать с какой позвонить", mainRepository.getErrorControl())
                         mainRepository.selectSimCard(slot1, slot2, phoneAccountCount)
                     }
                 } else {
-                    // Если активна только одна сим карта, выполняем вызов сразу
+                    LogManager.logOnMain(LogLevel.INFO, "startCall() Вызов selectSimCard() Активна только одна сим карта, выполняем вызов сразу", mainRepository.getErrorControl())
                     mainRepository.selectSimCard(slot1, slot2, phoneAccountCount)
                 }
             }
@@ -111,17 +121,17 @@ class DtmfService : Service(), KoinComponent {
     private fun endCall(isServiceNumber: Boolean) {
         if (mainRepository.getCallState() == Call.STATE_RINGING) {
             if (isServiceNumber) {
-                mainRepository.getCall()!!
-                    .reject(
-                        true,
-                        "Температура батареи: ${getCurrentBatteryTemperature(this) + "°С "}" +
-                                "Заряд батареи: ${getCurrentBatteryLevel(this) + "% "}" +
-                                "Напряжение батареи: ${getCurrentBatteryVoltage(this)}" + " В"
-                    )
+                val message = "Температура батареи: ${getCurrentBatteryTemperature(this) + "°С "}" +
+                        "Заряд батареи: ${getCurrentBatteryLevel(this) + "% "}" + "Режим работы: ${mainRepository.getCallState()}"
+                // Логируем текст отправленного сообщения
+                LogManager.logOnMain(LogLevel.INFO, "fun endCall() + $message", mainRepository.getErrorControl())
+                mainRepository.getCall()!!.reject(true, message)
             } else {
+                LogManager.logOnMain(LogLevel.INFO, "fun endCall() Отклонение входящего вызова и если совпадение номеров отправка сообщения", mainRepository.getErrorControl())
                 mainRepository.getCall()!!.reject(false, null)
             }
         } else {
+            LogManager.logOnMain(LogLevel.INFO, "fun endCall() Просто разрыв соеденения", mainRepository.getErrorControl())
             mainRepository.getCall()!!.disconnect()
         }
     }

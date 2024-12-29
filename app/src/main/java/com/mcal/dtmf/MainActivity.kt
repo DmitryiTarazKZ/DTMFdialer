@@ -16,6 +16,8 @@ import android.content.pm.PackageManager
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
+import com.mcal.dtmf.utils.LogManager
+import com.mcal.dtmf.data.repositories.main.LogLevel
 import android.telecom.Call
 import android.telecom.TelecomManager
 import android.view.KeyEvent
@@ -28,7 +30,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.lifecycleScope
 import cafe.adriel.voyager.navigator.Navigator
 import cafe.adriel.voyager.transitions.SlideTransition
 import com.mcal.dtmf.data.repositories.main.MainRepository
@@ -36,21 +37,36 @@ import com.mcal.dtmf.receiver.BootReceiver
 import com.mcal.dtmf.service.DtmfService
 import com.mcal.dtmf.ui.main.MainScreen
 import com.mcal.dtmf.ui.theme.VoyagerDialogTheme
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
+
 
 class MainActivity : ComponentActivity() {
     private val mainRepository: MainRepository by inject()
     private val permissionCode = 100
-
+    private var previousChargeState: String? = null
     private val powerReceiver: BroadcastReceiver = object : BootReceiver() {
+
         override fun onReceive(context: Context, intent: Intent?) {
             intent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1)?.let { chargePlug ->
                 val usbCharge = chargePlug == BatteryManager.BATTERY_PLUGGED_USB
                 val acCharge = chargePlug == BatteryManager.BATTERY_PLUGGED_AC
                 val wirelessCharge = chargePlug == BatteryManager.BATTERY_PLUGGED_WIRELESS
-                mainRepository.setPower(usbCharge || acCharge || wirelessCharge)
+                val isCharging = usbCharge || acCharge || wirelessCharge
+
+                // Определяем текущее состояние
+                val currentState = when {
+                    usbCharge -> "По USB"
+                    acCharge -> "От сети"
+                    wirelessCharge -> "Wireless"
+                    else -> "Отключена"
+                }
+
+                // Логируем только если состояние изменилось
+                if (currentState != previousChargeState) {
+                    mainRepository.setPower(isCharging)
+                    LogManager.logOnMain(LogLevel.INFO, "fun powerReceiver() Зарядка: $currentState", mainRepository.getErrorControl())
+                    previousChargeState = currentState
+                }
             }
         }
     }
@@ -58,17 +74,17 @@ class MainActivity : ComponentActivity() {
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
         when (keyCode) {
             KeyEvent.KEYCODE_HEADSETHOOK -> {
+                LogManager.logOnMain(LogLevel.INFO, "fun onKeyUp() Кнопка гарнитуры отпущена", mainRepository.getErrorControl())
                 mainRepository.setMicKeyClick(0)
-                // Если есть звонок, то взаимодействует с ним
-                // Иначе - запускает/останавливает таймер и сервис распознавания на 60 секунд
                 callAction()
                 return true
             }
 
             KeyEvent.KEYCODE_VOLUME_UP,
             KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                LogManager.logOnMain(LogLevel.INFO, "fun onKeyUp() Кнопка ${if(keyCode == KeyEvent.KEYCODE_VOLUME_UP) "увеличения" else "уменьшения"} громкости отпущена", mainRepository.getErrorControl())
                 mainRepository.setMicKeyClick(0)
-                if (mainRepository.getConnType() == "Репитер (2 Канала)") {
+                if (mainRepository.getModeSelection() == "Репитер (2 Канала)") {
                     callAction(true)
                 }
                 return true
@@ -81,16 +97,19 @@ class MainActivity : ComponentActivity() {
         super.onKeyUp(keyCode, event)
         when (keyCode) {
             KeyEvent.KEYCODE_HEADSETHOOK -> {
+                LogManager.logOnMain(LogLevel.INFO, "onKeyDown() Кнопка гарнитуры нажата", mainRepository.getErrorControl())
                 mainRepository.setMicKeyClick(KeyEvent.KEYCODE_HEADSETHOOK)
                 return true
             }
 
             KeyEvent.KEYCODE_VOLUME_UP -> {
+                LogManager.logOnMain(LogLevel.INFO, "onKeyDown() Кнопка увеличения громкости нажата", mainRepository.getErrorControl())
                 mainRepository.setMicKeyClick(KeyEvent.KEYCODE_VOLUME_UP)
                 return true
             }
 
             KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                LogManager.logOnMain(LogLevel.INFO, "onKeyDown() Кнопка уменьшения громкости нажата", mainRepository.getErrorControl())
                 mainRepository.setMicKeyClick(KeyEvent.KEYCODE_VOLUME_DOWN)
                 return true
             }
@@ -99,28 +118,33 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-
-
     private fun callAction(hasProblem: Boolean = false) {
-        if (mainRepository.getCall() != null && mainRepository.getConnType() == "Репитер (2 Канала") {
+        if (mainRepository.getCall() != null && mainRepository.getModeSelection() == "Репитер (2 Канала") {
             when (mainRepository.getCallState()) {
-                Call.STATE_RINGING -> DtmfService.callAnswer(this)
+                Call.STATE_RINGING -> {
+                    LogManager.logOnMain(LogLevel.INFO, "callAction() Ответ на входящий звонок", mainRepository.getErrorControl())
+                    DtmfService.callAnswer(this)
+                }
                 Call.STATE_ACTIVE,
                 Call.STATE_DIALING,
-                Call.STATE_CONNECTING -> DtmfService.callEnd(this)
+                Call.STATE_CONNECTING -> {
+                    LogManager.logOnMain(LogLevel.INFO, "callAction() Завершение звонка", mainRepository.getErrorControl())
+                    DtmfService.callEnd(this)
+                }
             }
         } else {
-            if (mainRepository.getConnType() == "Репитер (2 Канала)") {
-                mainRepository.setStartFlashlight(!mainRepository.getStartFlashlight(), hasProblem)
+            if (mainRepository.getModeSelection() == "Репитер (2 Канала)") {
+                val newState = !mainRepository.getStartDtmf()
+                mainRepository.setStartDtmf(newState, hasProblem)
             }
-
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        LogManager.logOnMain(LogLevel.INFO, "onCreate() Приложение запущено", mainRepository.getErrorControl())
         checkPermissions()
         offerReplacingDefaultDialer()
-        super.onCreate(savedInstanceState)
 
         setContent {
             VoyagerDialogTheme {
@@ -145,25 +169,15 @@ class MainActivity : ComponentActivity() {
             registerReceiver(powerReceiver, intentFilter)
         }
 
-        // Запускаем корутину для проверки DTMF анализа
-        checkDtmfAnalysis()
-
-    }
-
-    // автозапуск дтмф анализа через каждую минуту если по какойто причине остановился
-    private fun checkDtmfAnalysis() {
-        lifecycleScope.launch {
-            while (true) { // Удалена переменная isCheckingDtmf
-                if (mainRepository.getConnType() != "Репитер (2 Канала)") {
-                    mainRepository.startDtmfIfNotRunning()
-                }
-                delay(60000) // Задержка на 1 минуту
-            }
+        if (mainRepository.getModeSelection() != "Репитер (2 Канала)" && mainRepository.getStartDtmf() == false) {
+            LogManager.logOnMain(LogLevel.INFO, "Автоматический запуск DTMF распознавания при начальном старте приложения", mainRepository.getErrorControl())
+            mainRepository.setStartDtmf(!mainRepository.getStartDtmf())
         }
     }
 
     private fun offerReplacingDefaultDialer() {
         if (getSystemService(TelecomManager::class.java).defaultDialerPackage != packageName) {
+            LogManager.logOnMain(LogLevel.ERROR, "Приложение не является приложением по умолчанию для звонков, ПОПЫТКА ЗАПУСКА ПРИВЕДЕТ К ПАДЕНИЮ", mainRepository.getErrorControl())
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val intent =
                     getSystemService(RoleManager::class.java).createRequestRoleIntent(RoleManager.ROLE_DIALER)
@@ -178,7 +192,7 @@ class MainActivity : ComponentActivity() {
 
     private fun checkPermissions() {
         val permissionsToRequest = mutableListOf<String>()
-        // Запрос на чтение контактов
+
         if (ContextCompat.checkSelfPermission(
                 this,
                 Manifest.permission.READ_CONTACTS
@@ -187,7 +201,6 @@ class MainActivity : ComponentActivity() {
             permissionsToRequest.add(Manifest.permission.READ_CONTACTS)
         }
 
-        // Запрос разрешения на изменение состояния звука
         if (ContextCompat.checkSelfPermission(
                 this,
                 Manifest.permission.MODIFY_AUDIO_SETTINGS
@@ -196,7 +209,6 @@ class MainActivity : ComponentActivity() {
             permissionsToRequest.add(Manifest.permission.MODIFY_AUDIO_SETTINGS)
         }
 
-        // Запрос разрешения на включение режима "Не беспокоить"
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(
                     this,
@@ -206,7 +218,6 @@ class MainActivity : ComponentActivity() {
                 permissionsToRequest.add(Manifest.permission.ACCESS_NOTIFICATION_POLICY)
             }
         }
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(
                     this,
@@ -253,7 +264,9 @@ class MainActivity : ComponentActivity() {
         ) {
             permissionsToRequest.add(RECORD_AUDIO)
         }
+
         if (permissionsToRequest.isNotEmpty()) {
+            LogManager.logOnMain(LogLevel.ERROR, "Требуются разрешения: ${permissionsToRequest.joinToString(", ")} Не предоставление данных разрешений ПРИВЕДЕТ К ПАДЕНИЮ ПРИ ПОПЫТКЕ ЗАПУСКА", mainRepository.getErrorControl())
             ActivityCompat.requestPermissions(
                 this,
                 permissionsToRequest.toTypedArray(),
@@ -263,8 +276,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        LogManager.logOnMain(LogLevel.INFO, "onDestroy() Приложение остановлено", mainRepository.getErrorControl())
         super.onDestroy()
         unregisterReceiver(powerReceiver)
     }
-
 }

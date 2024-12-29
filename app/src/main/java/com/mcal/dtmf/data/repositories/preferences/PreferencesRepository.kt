@@ -7,37 +7,33 @@ interface PreferencesRepository {
     fun getServiceNumber(): String
     fun setServiceNumber(number: String)
 
-    fun getPlayMusicFlow(): Flow<Boolean>
-    fun getPlayMusic(): Boolean
-    fun setPlayMusic(enabled: Boolean)
-
     fun getFlashSignalFlow(): Flow<Boolean>
     fun getFlashSignal(): Boolean
     fun setFlashSignal(enabled: Boolean)
 
-    fun getDelayMusicFlow(): Flow<Long>
-    fun getDelayMusic(): Long
-    fun setDelayMusic(ms: Long)
+    fun getErrorControlFlow(): Flow<Boolean>
+    fun getErrorControl(): Boolean
+    fun setErrorControl(enabled: Boolean)
 
-    fun getDelayMusic1Flow(): Flow<Long>
-    fun getDelayMusic1(): Long
-    fun setDelayMusic1(ms: Long)
+    fun getVoxActivationFlow(): Flow<Long>
+    fun getVoxActivation(): Long
+    fun setVoxActivation(ms: Long)
 
-    fun getDelayMusic2Flow(): Flow<Long>
-    fun getDelayMusic2(): Long
-    fun setDelayMusic2(ms: Long)
+    fun getVoxHoldFlow(): Flow<Long>
+    fun getVoxHold(): Long
+    fun setVoxHold(ms: Long)
 
-    fun getConnTypeFlow(): Flow<String>
-    fun getConnType(): String
-    fun setConnType(value: String)
+    fun getVoxThresholdFlow(): Flow<Long>
+    fun getVoxThreshold(): Long
+    fun setVoxThreshold(ms: Long)
 
-    fun getSoundSourceFlow(): Flow<String>
-    fun getSoundSource(): String
-    fun setSoundSource(value: String)
+    fun getModeSelectionFlow(): Flow<String>
+    fun getModeSelection(): String
+    fun setModeSelection(value: String)
 
-    fun setSoundTest(enabled: Boolean, onSourceTested: (String, Boolean) -> Unit = { _, _ -> })
-    fun getSoundTest(): Boolean
-    fun getSoundTestFlow(): Flow<Boolean>
+    fun getVoxSettingFlow(): Flow<Boolean>
+    fun getVoxSetting(): Boolean
+    fun setVoxSetting(enabled: Boolean)
 
     fun getNumberAFlow(): Flow<String>
     fun getNumberA(): String

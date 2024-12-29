@@ -13,26 +13,22 @@ data class MainScreenState(
         '7', '8', '9', 'C',
         '*', '0', '#', 'D'
     ),
-    val input: String = "",
-    val spectrum: Spectrum? = null,
-    val key: Char = ' ',
-    val numberA: String = "",
-    val numberB: String = "",
-    val numberC: String = "",
-    val numberD: String = "",
-    var connectType: String = "Супертелефон",
-    val callDirection: Int = CallDirection.DIRECTION_UNKNOWN,
-    val callState: Int = Call.STATE_DISCONNECTED,
-    val isSpeakerOn: Boolean = false,
-    val delayMusic: Long = 200L,
-
-    val micClickKeyCode: Int = 0,
-    val timer: Int = 0,
-    val isPowerConnected: Boolean = false,
-    val isConnect: Boolean = false,
-
-    val flashlight: Boolean = false,
-    val isServiceStarted: Boolean = false,
-    var outputFrequency: Float = 0f,
+    val input: String = "", // Переменная поля ввода
+    val spectrum: Spectrum? = null, // Значение для отрисовки спектра
+    val key: Char = ' ', // Значение из блока Фурье
+    val numberA: String = "", // Номер быстрого набора A
+    val numberB: String = "", // Номер быстрого набора B
+    val numberC: String = "", // Номер быстрого набора C
+    val numberD: String = "", // Номер быстрого набора D
+    var modeSelection: String = "", // Выбор режима работы
+    val callDirection: Int = CallDirection.DIRECTION_UNKNOWN, // Направление вызова
+    val callState: Int = Call.STATE_DISCONNECTED, // Состояние вызова
+    val isSpeakerOn: Boolean = false, // Значение для громкоговорителя
+    val micClickKeyCode: Int = 0, // Значение кодов нажатия кнопок на гарнитуре
+    val timer: Int = 0, // Значение основного таймера
+    val isPowerConnected: Boolean = false, // Значение подключено ли зарядное устройство
+    val isConnect: Boolean = false, // Значение подключенны ли наушники
+    val flashlight: Boolean = false, // Значение включена ли вспышка
+    var outputFrequency1: Float = 0f, // Истинное значение частоты звука
 
 )

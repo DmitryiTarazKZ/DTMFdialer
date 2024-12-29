@@ -14,11 +14,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
+import com.mcal.dtmf.utils.LogManager
+import com.mcal.dtmf.data.repositories.main.LogLevel
 
 
 class CallService : InCallService(), KoinComponent {
     private val mainRepository: MainRepository by inject()
     private val preferencesRepository: PreferencesRepository by inject()
+
     private val callback = object : Call.Callback() {
         override fun onStateChanged(call: Call, state: Int) {
             super.onStateChanged(call, state)
@@ -30,6 +33,7 @@ class CallService : InCallService(), KoinComponent {
     override fun onCallAdded(call: Call) {
         super.onCallAdded(call)
 
+        val callNumber = call.details.handle?.schemeSpecificPart?.trim() ?: "fun onCallAdded() номер NULL"
         // Устанавливаем звонок
         mainRepository.setCall(call)
         // Устанавливаем сервис
@@ -42,23 +46,22 @@ class CallService : InCallService(), KoinComponent {
 
         // Если входящий, то проверяем сначала на сервисный номер, иначе включаем дтмф
         if (callDirection == CallDirection.DIRECTION_INCOMING) {
-            val callNumber = call.details.handle.schemeSpecificPart.trim()
+            LogManager.logOnMain(LogLevel.INFO, "fun onCallAdded() Входящий вызов с номера: $callNumber", mainRepository.getErrorControl())
             val serviceNumber = preferencesRepository.getServiceNumber().trim()
 
             if (containsNumbers(callNumber, serviceNumber)) {
+                LogManager.logOnMain(LogLevel.INFO, "fun onCallAdded() Совпадение номера входящего вызова с сервисным номером, отправка смс", mainRepository.getErrorControl())
                 DtmfService.callServiceAnswer(this)
                 return
             }
 
             if (mainRepository.getFlashlight() ?: false) {
-                // Вспышка уже включена, ничего не делаем
-            } else if (mainRepository.getConnType() != "Супертелефон"){
-                // Включаем вспышку
+            } else if (mainRepository.getModeSelection() != "Супертелефон"){
                 mainRepository.setFlashlight(true)
             }
 
-            if (!mainRepository.getStartFlashlight()) { // если дтмф выключен, то мы его включаем
-                mainRepository.setStartFlashlight(true)
+            if (!mainRepository.getStartDtmf()) {
+                mainRepository.setStartDtmf(true)
             } else {
                 CoroutineScope(Dispatchers.IO).launch {
                     mainRepository.speakSuperTelephone()
@@ -67,15 +70,31 @@ class CallService : InCallService(), KoinComponent {
             mainRepository.setInput(callNumber.replace("+", ""))
         }
 
-        // Каллбэк на изменение состояния звонка для определения направления и не только
+        // Каллбэк на изменение состояния звонка
         call.registerCallback(callback)
     }
+
+    private var previousRoute: Int? = null // Хранит предыдущее состояние маршрута
 
     @Deprecated("Этот метод устарел")
     override fun onCallAudioStateChanged(audioState: CallAudioState?) {
         super.onCallAudioStateChanged(audioState)
         if (audioState != null) {
-            mainRepository.setCallAudioRoute(audioState.route)
+            val currentRoute = audioState.route
+            val routeStr = when (currentRoute) {
+                CallAudioState.ROUTE_EARPIECE -> "ДИНАМИК НЕ ГРОМКОЙ СВЯЗИ (код = 1)"
+                CallAudioState.ROUTE_BLUETOOTH -> "BLUETOOTH (код = 2)"
+                CallAudioState.ROUTE_SPEAKER -> "ГРОМКОГОВОРИТЕЛЬ (код = 8)"
+                CallAudioState.ROUTE_WIRED_HEADSET -> "ПРОВОДНУЮ ГАРНИТУРУ (код = 4)"
+                else -> "UNKNOWN"
+            }
+
+            // Проверка на изменение маршрута
+            if (currentRoute != previousRoute) {
+                LogManager.logOnMain(LogLevel.INFO, "fun onCallAudioStateChanged() Смена аудиомаршрута, звук выводится на: $routeStr", mainRepository.getErrorControl())
+                mainRepository.setCallAudioRoute(currentRoute)
+                previousRoute = currentRoute // Обновляем предыдущее состояние
+            }
         }
     }
 
@@ -104,15 +123,15 @@ class CallService : InCallService(), KoinComponent {
     }
 
     override fun onCallRemoved(call: Call) {
-        super.onCallRemoved(call)
-        val callState: Int = getCallState(call)
-        //Задержка отключения вспышки после завершения вызова
-        mainRepository.setTimer(7000)
-        mainRepository.setCall(null)
-        mainRepository.setInput("", withoutTimer = true)
-        mainRepository.setCallState(callState)
-        mainRepository.setCallDirection(getCallDirection(callState))
-        call.unregisterCallback(callback)
+            super.onCallRemoved(call)
+            val callState: Int = getCallState(call)
+            //Задержка отключения вспышки после завершения вызова
+            mainRepository.setTimer(7000)
+            mainRepository.setCall(null)
+            mainRepository.setInput("", withoutTimer = true)
+            mainRepository.setCallState(callState)
+            mainRepository.setCallDirection(getCallDirection(callState))
+            call.unregisterCallback(callback)
     }
 
     private fun getCallState(call: Call): Int {
@@ -127,19 +146,15 @@ class CallService : InCallService(), KoinComponent {
             Call.STATE_RINGING -> {
                 CallDirection.DIRECTION_INCOMING
             }
-
             Call.STATE_CONNECTING -> {
                 CallDirection.DIRECTION_OUTGOING
             }
-
             Call.STATE_DISCONNECTED -> {
                 CallDirection.DIRECTION_UNKNOWN
             }
-
             Call.STATE_ACTIVE -> {
                 CallDirection.DIRECTION_ACTIVE
             }
-
             else -> {
                 mainRepository.getCallDirection()
             }

@@ -1,14 +1,11 @@
 package com.mcal.dtmf.data.repositories.preferences
 
-import android.Manifest
+
 import android.content.Context
-import android.content.pm.PackageManager
-import android.media.AudioFormat
-import android.media.AudioRecord
-import android.media.MediaRecorder
-import android.util.Log
-import androidx.core.content.ContextCompat
 import androidx.preference.PreferenceManager
+import com.mcal.dtmf.data.repositories.main.LogLevel
+import com.mcal.dtmf.data.repositories.main.MainRepository
+import com.mcal.dtmf.utils.LogManager
 import kotlinx.coroutines.flow.*
 
 
@@ -22,14 +19,13 @@ class PreferencesRepositoryImpl(
         private const val NUMBER_C = "number_c"
         private const val NUMBER_D = "number_d"
         private const val NUMBER_SERVICE = "number_service"
-        private const val PLAY_MUSIC = "play_music"
         private const val FLASH_SIGNAL = "flash_signal"
+        private const val ERROR_CONTROL = "error_control"
         private const val DELAY_VOX = "delay_vox"
         private const val DELAY_VOX1 = "delay_vox1"
         private const val DELAY_VOX2 = "delay_vox2"
         private const val IS_EMERGENCY = "is_emergency"
         private const val IS_EMERGENCY1 = "is_emergency1"
-        private const val IS_EMERGENCY2 = "is_emergency2"
     }
 
     private val prefs = PreferenceManager.getDefaultSharedPreferences(context)
@@ -38,19 +34,13 @@ class PreferencesRepositoryImpl(
     private val _numberC: MutableStateFlow<String?> = MutableStateFlow(null)
     private val _numberD: MutableStateFlow<String?> = MutableStateFlow(null)
     private val _serviceNumber: MutableStateFlow<String?> = MutableStateFlow(null)
-    private val _playMusic: MutableStateFlow<Boolean?> = MutableStateFlow(null)
     private val _flashSignal: MutableStateFlow<Boolean?> = MutableStateFlow(null)
-    private val _delayMusic: MutableStateFlow<Long?> = MutableStateFlow(null)
-    private val _delayMusic1: MutableStateFlow<Long?> = MutableStateFlow(null)
-    private val _delayMusic2: MutableStateFlow<Long?> = MutableStateFlow(null)
-    private val _connType: MutableStateFlow<String?> = MutableStateFlow(null)
-    private val _soundSource: MutableStateFlow<String?> = MutableStateFlow(null)
-    private val _soundTest: MutableStateFlow<Boolean?> = MutableStateFlow(null)
-    private val _soundSourceAvailability: MutableStateFlow<Map<String, Boolean>> = MutableStateFlow(emptyMap())
-    private val sampleRate = 16000 // Частота дискретизации запись звука
-    private val channelConfig = AudioFormat.CHANNEL_IN_MONO // Конфигурация канала моно
-    private val audioFormat = AudioFormat.ENCODING_PCM_16BIT // Формат записи
-    private val blockSize = 1024 // Размер буфера записи
+    private val _errorControl: MutableStateFlow<Boolean?> = MutableStateFlow(null)
+    private val _voxActivation: MutableStateFlow<Long?> = MutableStateFlow(null)
+    private val _voxHold: MutableStateFlow<Long?> = MutableStateFlow(null)
+    private val _voxThreshold: MutableStateFlow<Long?> = MutableStateFlow(null)
+    private val _modeSelection: MutableStateFlow<String?> = MutableStateFlow(null)
+    private val _voxSetting: MutableStateFlow<Boolean?> = MutableStateFlow(null)
 
 
     /**
@@ -81,167 +71,49 @@ class PreferencesRepositoryImpl(
      * Получение значения выбранного типа связи
      */
 
-    override fun getConnTypeFlow(): Flow<String> = flow {
-        if (_connType.value == null) {
+    override fun getModeSelectionFlow(): Flow<String> = flow {
+        if (_modeSelection.value == null) {
             try {
-                getConnType()
+                getModeSelection()
             } catch (ex: Exception) {
                 ex.printStackTrace()
             }
         }
-        emitAll(_connType.filterNotNull())
+        emitAll(_modeSelection.filterNotNull())
     }
 
-    override fun getConnType(): String {
+    override fun getModeSelection(): String {
         val default = "Репитер (2 Канала+)" // Значение по умолчанию
-        return _connType.value ?: prefs.getString(IS_EMERGENCY, default) ?: default
+        return _modeSelection.value ?: prefs.getString(IS_EMERGENCY, default) ?: default
     }
 
-    override fun setConnType(value: String) {
+    override fun setModeSelection(value: String) {
         prefs.edit().putString(IS_EMERGENCY, value).apply()
-        _connType.update { value }
+        _modeSelection.update { value }
     }
 
     /**
-     * Получение значения источника звука для электронной VOX системы
+     * Отладка порога и удержания VOX
      */
 
-    override fun getSoundSourceFlow(): Flow<String> = flow {
-        if (_soundSource.value == null) {
+    override fun getVoxSettingFlow(): Flow<Boolean> = flow {
+        if (_voxSetting.value == null) {
             try {
-                getSoundSource()
+                getVoxSetting()
             } catch (ex: Exception) {
                 ex.printStackTrace()
             }
         }
-        emitAll(_soundSource.filterNotNull())
+        emitAll(_voxSetting.filterNotNull())
     }
 
-    override fun getSoundSource(): String {
-        val default = "MIC" // Значение по умолчанию
-        return _soundSource.value ?: prefs.getString(IS_EMERGENCY1, default) ?: default
+    override fun getVoxSetting(): Boolean {
+        return _voxSetting.value ?: prefs.getBoolean(IS_EMERGENCY1, false)
     }
 
-    override fun setSoundSource(value: String) {
-        prefs.edit().putString(IS_EMERGENCY1, value).apply()
-        _soundSource.update { value }
-    }
-
-    /**
-     * Тестирование доступных источников
-     */
-
-    override fun getSoundTestFlow(): Flow<Boolean> = flow {
-        if (_soundTest.value == null) {
-            try {
-                getSoundTest()
-            } catch (ex: Exception) {
-                ex.printStackTrace()
-            }
-        }
-    }
-
-    override fun getSoundTest(): Boolean {
-        return _soundTest.value ?: prefs.getBoolean(IS_EMERGENCY2, false)
-    }
-
-    override fun setSoundTest(enabled: Boolean, onSourceTested: (String, Boolean) -> Unit) {
-        prefs.edit().putBoolean(IS_EMERGENCY2, enabled).apply()
-        if (enabled) {
-            // Проверяем разрешение на запись аудио
-            if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
-                != PackageManager.PERMISSION_GRANTED) {
-                _soundTest.update { false }
-                return
-            }
-
-            val audioSources = listOf(
-                "MIC", "VOICE_UPLINK", "VOICE_DOWNLINK", "VOICE_CALL",
-                "CAMCORDER", "VOICE_RECOGNITION", "VOICE_COMMUNICATION",
-                "REMOTE_SUBMIX", "UNPROCESSED", "VOICE_PERFORMANCE"
-            )
-
-            // Создаем карту доступности источников звука
-            val soundSourceAvailability = mutableMapOf<String, Boolean>()
-
-            // Запускаем тестирование в отдельном потоке
-            Thread {
-                audioSources.forEach { sourceName ->
-                    try {
-                        val soundSource = when (sourceName) {
-                            "MIC" -> MediaRecorder.AudioSource.MIC
-                            "VOICE_UPLINK" -> MediaRecorder.AudioSource.VOICE_UPLINK
-                            "VOICE_DOWNLINK" -> MediaRecorder.AudioSource.VOICE_DOWNLINK
-                            "VOICE_CALL" -> MediaRecorder.AudioSource.VOICE_CALL
-                            "CAMCORDER" -> MediaRecorder.AudioSource.CAMCORDER
-                            "VOICE_RECOGNITION" -> MediaRecorder.AudioSource.VOICE_RECOGNITION
-                            "VOICE_COMMUNICATION" -> MediaRecorder.AudioSource.VOICE_COMMUNICATION
-                            "REMOTE_SUBMIX" -> MediaRecorder.AudioSource.REMOTE_SUBMIX
-                            "UNPROCESSED" -> MediaRecorder.AudioSource.UNPROCESSED
-                            "VOICE_PERFORMANCE" -> MediaRecorder.AudioSource.VOICE_PERFORMANCE
-                            else -> MediaRecorder.AudioSource.DEFAULT
-                        }
-
-                        // Используем фиксированный размер буфера
-                        val bufferSize = blockSize
-                        var audioRecord: AudioRecord? = null
-                        try {
-                            audioRecord = AudioRecord(
-                                soundSource, sampleRate, channelConfig,
-                                audioFormat, bufferSize
-                            )
-
-                            if (audioRecord.state == AudioRecord.STATE_INITIALIZED) {
-                                audioRecord.startRecording()
-                                Thread.sleep(200) // Увеличена задержка для стабильности
-                                audioRecord.stop()
-                                soundSourceAvailability[sourceName] = true
-                                onSourceTested(sourceName, true) // Сообщаем об успехе
-                            } else {
-                                soundSourceAvailability[sourceName] = false
-                                onSourceTested(sourceName, false) // Сообщаем о неудаче
-                            }
-                        } catch (e: Exception) {
-                            soundSourceAvailability[sourceName] = false
-                            onSourceTested(sourceName, false) // Сообщаем о неудаче
-                        } finally {
-                            audioRecord?.release()
-                        }
-
-                    } catch (e: Exception) {
-                        soundSourceAvailability[sourceName] = false
-                        onSourceTested(sourceName, false) // Сообщаем о неудаче
-                    }
-                }
-            }.start()
-
-            // Обновляем доступность источников звука
-            _soundSourceAvailability.update { soundSourceAvailability }
-        }
-        _soundTest.update { enabled }
-    }
-
-    /**
-     *  Включение/Отключение озвучивания
-     */
-    override fun getPlayMusicFlow(): Flow<Boolean> = flow {
-        if (_playMusic.value == null) {
-            try {
-                getPlayMusic()
-            } catch (ex: Exception) {
-                ex.printStackTrace()
-            }
-        }
-        emitAll(_playMusic.filterNotNull())
-    }
-
-    override fun getPlayMusic(): Boolean {
-        return _playMusic.value ?: prefs.getBoolean(PLAY_MUSIC, false)
-    }
-
-    override fun setPlayMusic(enabled: Boolean) {
-        prefs.edit().putBoolean(PLAY_MUSIC, enabled).apply()
-        _playMusic.update { enabled }
+    override fun setVoxSetting(enabled: Boolean) {
+        prefs.edit().putBoolean(IS_EMERGENCY1, enabled).apply()
+        _voxSetting.update { enabled }
     }
 
     /**
@@ -268,73 +140,96 @@ class PreferencesRepositoryImpl(
     }
 
     /**
-     * Активация VOX системы посредством начального проигрывания тона 1000гц заданной длительности
+     *  Включение/Отключение сигнальной вспышки в режиме супертелефон
      */
-    override fun getDelayMusicFlow(): Flow<Long> = flow {
-        if (_delayMusic.value == null) {
+    override fun getErrorControlFlow(): Flow<Boolean> = flow {
+        if (_errorControl.value == null) {
             try {
-                getDelayMusic()
+                getFlashSignal()
             } catch (ex: Exception) {
                 ex.printStackTrace()
             }
         }
-        emitAll(_delayMusic.filterNotNull())
+        emitAll(_errorControl.filterNotNull())
     }
 
-    override fun getDelayMusic(): Long {
-        return _delayMusic.value ?: prefs.getLong(DELAY_VOX, 250L)
+    override fun getErrorControl(): Boolean {
+        return _errorControl.value ?: prefs.getBoolean(ERROR_CONTROL, false)
     }
 
-    override fun setDelayMusic(ms: Long) {
+    override fun setErrorControl(enabled: Boolean) {
+        prefs.edit().putBoolean(ERROR_CONTROL, enabled).apply()
+        _errorControl.update { enabled }
+    }
+
+    /**
+     * Активация VOX системы посредством начального проигрывания тона 1000гц заданной длительности
+     */
+    override fun getVoxActivationFlow(): Flow<Long> = flow {
+        if (_voxActivation.value == null) {
+            try {
+                getVoxActivation()
+            } catch (ex: Exception) {
+                ex.printStackTrace()
+            }
+        }
+        emitAll(_voxActivation.filterNotNull())
+    }
+
+    override fun getVoxActivation(): Long {
+        return _voxActivation.value ?: prefs.getLong(DELAY_VOX, 250L)
+    }
+
+    override fun setVoxActivation(ms: Long) {
         prefs.edit().putLong(DELAY_VOX, ms).apply()
-        _delayMusic.update { ms }
+        _voxActivation.update { ms }
     }
 
     /**
      * Настройка VOX системы время удержания
      */
-    override fun getDelayMusic1Flow(): Flow<Long> = flow {
-        if (_delayMusic1.value == null) {
+    override fun getVoxHoldFlow(): Flow<Long> = flow {
+        if (_voxHold.value == null) {
             try {
-                getDelayMusic1()
+                getVoxHold()
             } catch (ex: Exception) {
                 ex.printStackTrace()
             }
         }
-        emitAll(_delayMusic1.filterNotNull())
+        emitAll(_voxHold.filterNotNull())
     }
 
-    override fun getDelayMusic1(): Long {
-        return _delayMusic1.value ?: prefs.getLong(DELAY_VOX1, 500L)
+    override fun getVoxHold(): Long {
+        return _voxHold.value ?: prefs.getLong(DELAY_VOX1, 500L)
     }
 
-    override fun setDelayMusic1(ms: Long) {
+    override fun setVoxHold(ms: Long) {
         prefs.edit().putLong(DELAY_VOX1, ms).apply()
-        _delayMusic1.update { ms }
+        _voxHold.update { ms }
     }
 
     /**
      * Настройка VOX системы порог срабатывания
      */
-    override fun getDelayMusic2Flow(): Flow<Long> = flow {
-        if (_delayMusic2.value == null) {
+    override fun getVoxThresholdFlow(): Flow<Long> = flow {
+        if (_voxThreshold.value == null) {
             try {
-                getDelayMusic2()
+                getVoxThreshold()
             } catch (ex: Exception) {
                 ex.printStackTrace()
             }
         }
-        emitAll(_delayMusic2.filterNotNull())
+        emitAll(_voxThreshold.filterNotNull())
     }
 
-    override fun getDelayMusic2(): Long {
+    override fun getVoxThreshold(): Long {
         val default = 500L // Значение по умолчанию
-        return _delayMusic2.value ?: prefs.getLong(DELAY_VOX2, default)
+        return _voxThreshold.value ?: prefs.getLong(DELAY_VOX2, default)
     }
 
-    override fun setDelayMusic2(ms: Long) {
+    override fun setVoxThreshold(ms: Long) {
         prefs.edit().putLong(DELAY_VOX2, ms).apply()
-        _delayMusic2.update { ms }
+        _voxThreshold.update { ms }
     }
 
 

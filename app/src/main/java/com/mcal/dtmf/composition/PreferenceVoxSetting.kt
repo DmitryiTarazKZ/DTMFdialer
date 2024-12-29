@@ -1,7 +1,6 @@
 package com.mcal.dtmf.composition
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -20,7 +19,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 @Composable
-fun PreferenceSwitch(
+fun PreferenceVoxSetting(
     text: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
@@ -49,7 +48,7 @@ fun PreferenceSwitch(
             )
             Text(
                 modifier = Modifier.fillMaxWidth(),
-                text = if (checked) "Сработает при f=1750гц" else "Отключена",
+                text = if (checked) "Отладка включена" else "Отладка отключена",
                 style = TextStyle(
                     fontWeight = FontWeight(300),
                     textAlign = TextAlign.Start,
