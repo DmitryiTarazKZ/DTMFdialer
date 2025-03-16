@@ -1,6 +1,7 @@
 package com.mcal.dtmf.data.repositories.main
 
 import android.annotation.SuppressLint
+import android.app.Application
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
@@ -8,26 +9,26 @@ import android.hardware.camera2.CameraManager
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
+import android.media.AudioTrack
 import android.media.MediaPlayer
 import android.media.MediaRecorder
+import android.media.ToneGenerator
+import android.net.Uri
+import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.telecom.Call
-import android.telecom.CallAudioState
-import android.telecom.InCallService
+import android.util.Log
 import com.mcal.dtmf.R
-import com.mcal.dtmf.data.repositories.preferences.PreferencesRepository
 import com.mcal.dtmf.recognizer.DataBlock
 import com.mcal.dtmf.recognizer.Recognizer
 import com.mcal.dtmf.recognizer.Spectrum
 import com.mcal.dtmf.recognizer.StatelessRecognizer
 import com.mcal.dtmf.service.DtmfService
-import com.mcal.dtmf.utils.LogManager
-import com.mcal.dtmf.utils.CallDirection
 import com.mcal.dtmf.utils.Utils
-import com.mcal.dtmf.utils.Utils.Companion.headphoneReceiver
+import com.mcal.dtmf.utils.Utils.Companion.batteryStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -42,110 +43,118 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.lang.ref.WeakReference
+import java.util.Locale
 import java.util.concurrent.LinkedBlockingQueue
 import kotlin.coroutines.cancellation.CancellationException
-
-// Определение уровня логирования
-enum class LogLevel {
-    INFO,
-    WARNING,
-    ERROR
-}
+import kotlin.math.sin
+import kotlin.time.DurationUnit
+import kotlin.time.toDuration
 
 class MainRepositoryImpl(
-    private val context: Context,
-    private val preferencesRepository: PreferencesRepository,
-    private val textToSpeech: TextToSpeech,
+    private val context: Application,
+    private var textToSpeech: TextToSpeech,
 
-) : MainRepository {
-    private var utils = Utils(this, false, CoroutineScope(Dispatchers.IO))
+    ) : MainRepository {
+    private var utils = Utils(this, CoroutineScope(Dispatchers.IO))
     private var job = SupervisorJob()
     private var scope = CoroutineScope(Dispatchers.IO + job)
     private var recorderJob = scope
     private var recognizerJob = scope
-    private var flashlightJob = scope
     private var playSoundJob = scope
 
     private val _spectrum: MutableStateFlow<Spectrum?> = MutableStateFlow(null)
     private val _key: MutableStateFlow<Char?> = MutableStateFlow(null)
-    private val _input: MutableStateFlow<String?> = MutableStateFlow(null) // Значение переменной выводимой в поле ввода
+    private val _input: MutableStateFlow<String?> = MutableStateFlow(null)
+    private val _input1: MutableStateFlow<String?> = MutableStateFlow(null)
     private val _call: MutableStateFlow<Call?> = MutableStateFlow(null)
-    private val _callService: MutableStateFlow<InCallService?> = MutableStateFlow(null)
     private val _callState: MutableStateFlow<Int> = MutableStateFlow(Call.STATE_DISCONNECTED)
-    private val _callDirection: MutableStateFlow<Int> =
-        MutableStateFlow(CallDirection.DIRECTION_UNKNOWN)
-    private val _callAudioRoute: MutableStateFlow<Int> =
-        MutableStateFlow(CallAudioState.ROUTE_EARPIECE)
-    private val _timer: MutableStateFlow<Long> = MutableStateFlow(0) // Значение основного таймера
-    private val _outputFrequency1: MutableStateFlow<Float?> = MutableStateFlow(0f) // Значение истинной частоты с блока преобразования Фурье
-    private val _flashlight: MutableStateFlow<Boolean?> = MutableStateFlow(null)
-    private val _micKeyClick: MutableStateFlow<Int?> = MutableStateFlow(null)
     private val _powerState: MutableStateFlow<Boolean?> = MutableStateFlow(null)
-    private val _isConnect: MutableStateFlow<Boolean?> = MutableStateFlow(null)
-    private val _isDTMFStarted: MutableStateFlow<Boolean> = MutableStateFlow(false)
+    private val _amplitudeCheck: MutableStateFlow<Boolean?> = MutableStateFlow(null)
+    private val _sim: MutableStateFlow<Int> = MutableStateFlow(0)
+
     private val blockingQueue = LinkedBlockingQueue<DataBlock>()
     private val recognizer = Recognizer()
     private val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-    private val sampleRate = 16000 // Частота дискретизации запись звука
-    private val channelConfig = AudioFormat.CHANNEL_IN_MONO // Конфигурация канала моно
-    private val audioFormat = AudioFormat.ENCODING_PCM_16BIT // Формат записи
-    private val blockSize = 1024 // Размер буфера записи
+    private val sampleRate = 16000
+    private val channelConfig = AudioFormat.CHANNEL_IN_MONO
+    private val audioFormat = AudioFormat.ENCODING_PCM_16BIT
+    private val blockSize = 1024
     private var audioRecord: AudioRecord? = null
-    private var isFlashlightOn = false // Флаг для устранения мерцания сигнальной вспышки
-    private var isButtonPressed = false // Флаг подтверждающий факт выбора одной из сим карт
-    private var flagSim = false
-    private var sim = 0
-    private var volumeLevel = 70 // Начальная установка громкости с последующей регулировкой в режиме Супертелефон
-    private var flagVoise: Boolean = false// Флаг обеспечивающий быстрое отключение вспышки после завершения речевых сообщений
-    private var slotSim1: String? = null
-    private var slotSim2: String? = null
-    private var isSpeaking = false // Флаг для отслеживания состояния произнесения текста
+    private var volumeLevelTts = 90
+    private var volumeLevelCall = 90
+    private var isTorchOnIs = 0
+    private var isSpeaking = false
+    private var lastDialedNumber: String = ""
+    private var voxActivation = 500L
+    private var numberA = ""
+    private var numberB = ""
+    private var numberC = ""
+    private var numberD = ""
+    private var isTorchOn = false
+    private var flagVox = false
+    private var durationVox = 50L
+    private var periodVox = 3000L
+
+    // УПРАВЛЕНИЕ СУБТОНАМИ ДЛЯ СЕЛЕКТИВНОГО ВЫЗОВА
+    private var audioTrack: AudioTrack? = null
+    private var isPlaying = false
+    private val SAMPLE_RATE = 44100
+    private val AMPLITUDE = 0.1
 
     init {
 
-        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
 
-        // Проверяем, есть ли доступ к режиму "Не беспокоить"
         if (notificationManager.isNotificationPolicyAccessGranted()) {
-            // Устанавливаем фильтр прерываний, если он не установлен
+
             if (notificationManager.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL) {
                 try {
                     notificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL)
                 } catch (e: SecurityException) {
-                    // Обработка исключения, если доступ к изменению фильтра прерываний был потерян
                     e.printStackTrace()
                 }
             }
         } else {
-            // Запрашиваем доступ к режиму "Не беспокоить"
             val intent = Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK
             }
             context.startActivity(intent)
         }
 
-        // Производим начальную уcтановку громкости всех потоков на 70%
-        val volumeStreams = listOf(
-            AudioManager.STREAM_RING,
-            AudioManager.STREAM_MUSIC,
-            AudioManager.STREAM_NOTIFICATION,
-            AudioManager.STREAM_SYSTEM,
-            AudioManager.STREAM_VOICE_CALL
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (!powerManager.isIgnoringBatteryOptimizations(context.packageName)) { // Проверка на оптимизацию
+                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                    data = Uri.parse("package:${context.packageName}")
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                context.startActivity(intent)
+            }
+        }
+
+        // Устанавливаем громкость для каждого потока отдельно
+        val volumeSettings = mapOf(
+            AudioManager.STREAM_RING to 0.7,
+            AudioManager.STREAM_MUSIC to 0.9,
+            AudioManager.STREAM_NOTIFICATION to 0.7,
+            AudioManager.STREAM_SYSTEM to 0.7,
+            AudioManager.STREAM_VOICE_CALL to 0.9,
+            AudioManager.STREAM_ALARM to 0.7,
+            AudioManager.STREAM_DTMF to 0.7,
         )
-        volumeStreams.forEach { stream ->
+
+        volumeSettings.forEach { (stream, volumeFraction) ->
             audioManager.setStreamVolume(
                 stream,
-                (audioManager.getStreamMaxVolume(stream) * 0.7).toInt(),
+                (audioManager.getStreamMaxVolume(stream) * volumeFraction).toInt(),
                 0
             )
         }
     }
 
-    // Функция настройки громкости
-    private fun setVolume(level: Int) {
-        LogManager.logOnMain(LogLevel.INFO, "fun setVolume() Установка громкости на $level %", getErrorControl())
+
+    private fun setVolumeTts(level: Int) {
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         audioManager.setStreamVolume(
             AudioManager.STREAM_MUSIC,
@@ -154,48 +163,65 @@ class MainRepositoryImpl(
         )
     }
 
-    // Включение режима не беспокоить
-    private fun enableDoNotDisturb() {
-        LogManager.logOnMain(LogLevel.INFO, "fun enableDoNotDisturb() Режим НЕ БЕСПОКОИТЬ включен", getErrorControl())
-        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_PRIORITY)
+    private fun setVolumeCall(level: Int) {
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        audioManager.setStreamVolume(
+            AudioManager.STREAM_VOICE_CALL,
+            (audioManager.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL) * level / 100),
+            0
+        )
     }
 
-    // Отключение режима не беспокоить
-    private fun disableDoNotDisturb() {
-        LogManager.logOnMain(LogLevel.INFO, "fun disableDoNotDisturb() Режим НЕ БЕСПОКОИТЬ отключен", getErrorControl())
-        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL)
-    }
+    // Контрольные тона для отладки VOX
+    private fun playDtmfTones(period: Long, duration: Long) {
+        playSoundJob.launch {
+            val dtmfDigits = listOf(
+                ToneGenerator.TONE_DTMF_0,
+                ToneGenerator.TONE_DTMF_1,
+                ToneGenerator.TONE_DTMF_2,
+                ToneGenerator.TONE_DTMF_3,
+                ToneGenerator.TONE_DTMF_4,
+                ToneGenerator.TONE_DTMF_5,
+                ToneGenerator.TONE_DTMF_6,
+                ToneGenerator.TONE_DTMF_7,
+                ToneGenerator.TONE_DTMF_8,
+                ToneGenerator.TONE_DTMF_9,
+                ToneGenerator.TONE_DTMF_P
+            )
 
-    // Код включения громкоговорителя
-    override fun enableSpeaker() { LogManager.logOnMain(LogLevel.INFO, "fun enableSpeaker() ГРОМКОГОВОРИТЕЛЬ включен", getErrorControl())
-        // Перед включением громкоговорителя отключить режим не беспокоить
-        disableDoNotDisturb()
-        if (!getIsConnect()) {
-            setCallAudioRoute(CallAudioState.ROUTE_SPEAKER)
+            for (i in dtmfDigits.indices) {
+              delay(period) // период проигрывания
+            playDtmfTone(dtmfDigits[i], period, duration)
+            }
         }
     }
 
-    // Код отключения громкоговорителя
-    override fun disableSpeaker() {
-        LogManager.logOnMain(LogLevel.INFO, "fun disableSpeaker() ГРОМКОГОВОРИТЕЛЬ отключен", getErrorControl())
-        // Перед отключением громкоговорителя включить режим не беспокоить
-        enableDoNotDisturb()
-        setCallAudioRoute(CallAudioState.ROUTE_EARPIECE)
+    private fun playDtmfTone(tone: Int, period: Long, duration: Long) {
+        val toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 100) // 100 - громкость
+        playSoundJob.launch {
+            toneGenerator.startTone(tone, duration.toInt()) // Длительность тона
+            delay(period) // период проигрывания
+            toneGenerator.release()
+        }
     }
 
-    // Тон для активации VOX радиостанции
-    private fun delayTon1000hz(onComplete: suspend () -> Unit) {
-        val timeTon1000 = preferencesRepository.getVoxActivation()
+    private fun playDtmfTones1(duration: Long, tone: Int) {
+        val toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 100) // 100 - громкость
+        playSoundJob.launch {
+            toneGenerator.startTone(tone, duration.toInt()) // Длительность тона
+            delay(duration) // период проигрывания
+            toneGenerator.release()
+        }
+    }
+
+    private fun delayTon1000hz(delayMillis: Long = 2000,onComplete: suspend () -> Unit) {
         val mediaPlayer = MediaPlayer.create(context, R.raw.beep1000hz)
         playSoundJob.launch {
             try {
-                delay(2000)
-                if (isActive && getModeSelection() == "Супертелефон") {
-                    LogManager.logOnMain(LogLevel.INFO, "Тон активации VOX запущен на $timeTon1000 мс", getErrorControl())
+                delay(delayMillis)
+                if (isActive) {
                     mediaPlayer.start()
-                    delay(timeTon1000)
+                    delay(voxActivation)
                     mediaPlayer.stop()
                     mediaPlayer.release()
                 }
@@ -206,228 +232,55 @@ class MainRepositoryImpl(
         }
     }
 
-    // Основная логика работы таймера вспышки и дтмф анализа
-
-    override fun getStartDtmfFlow(): Flow<Boolean> = flow {
-        emitAll(_isDTMFStarted)
-    }
-
-    override fun getStartDtmf(): Boolean {
-        return _isDTMFStarted.value
-    }
-
-    override fun setStartDtmf(enabled: Boolean, hasProblem: Boolean) {
-        if (enabled) {
-            LogManager.logOnMain(LogLevel.INFO, "fun setStartDtmf() Запуск DTMF системы${if (hasProblem) " (обнаружено повышенное сопротивление)" else ""}", getErrorControl())
-            startDtmf()
-            scope.launch {
-                if (getIsConnect() || getModeSelection() == "Супертелефон") {
-                    enableDoNotDisturb()
-                } else disableDoNotDisturb()
-
-                if (getCallDirection() != CallDirection.DIRECTION_INCOMING) {
-                    var mediaId: Int = R.raw.start_timer
-                    if (hasProblem) {
-                        mediaId = R.raw.headset_malfunction
-                    }
-
-                    val mediaPlayer = MediaPlayer.create(context, mediaId)
-                    delay(2000)
-                    if (!mediaPlayer.isPlaying) {
-                        if (getModeSelection() == "Репитер (2 Канала)") {
-                            LogManager.logOnMain(LogLevel.INFO, "fun setStartDtmf() Воспроизведение ${if (hasProblem) "предупреждения о неисправности" else "сигнала старта"}", getErrorControl())
-                            mediaPlayer.start()
-                        }
-                    }
-                    mediaPlayer.setOnCompletionListener {
-                        mediaPlayer.release()
-                    }
-                }
-                if (getCallDirection() == CallDirection.DIRECTION_INCOMING) {
-                    speakSuperTelephone()
-                }
-            }
-
-            flashlightJob.launch {
-                val timerCheckpoints = (0..90 step 5).map { it * 1000L }.reversed()
-                var timer: Long
-                do {
-                    timer = getTimer()
-                    if ((getModeSelection() != "Репитер (2 Канала)") && timer < 5) {
-                        timer = 30000
-                        isSpeaking = false
-                        flagSim = false
-                        setInput("")
-                    }
-                    if (timer != 0L) {
-                        if (getCallDirection() == CallDirection.DIRECTION_UNKNOWN) {
-                            setTimer(timer - 1000)
-                        }
-                        if (getCallDirection() == CallDirection.DIRECTION_OUTGOING) {
-                            setTimer(timer - 1000)
-                            playSoundJob.launch {
-                                if (timerCheckpoints.contains(timer) && getModeSelection() != "Супертелефон") {
-                                    speakText("Идет вызов")
-                                    if (timer == 10000L) {
-                                        LogManager.logOnMain(LogLevel.ERROR, "fun setStartDtmf() Превышено время ожидания ответа", getErrorControl())
-                                        speakText("Не удачное расположение репитера, выберите другое место")
-                                        DtmfService.callEnd(context)
-                                    }
-                                }
-                            }
-                        }
-                        delay(1000)
-                    }
-                } while (timer > 0)
-                if (getModeSelection() == "Репитер (2 Канала)") {
-                    LogManager.logOnMain(LogLevel.INFO, "fun setStartDtmf() Таймер истек, остановка DTMF системы", getErrorControl())
-                    stopDtmf()
-                }
-            }
-        } else {
-            if (getModeSelection() == "Репитер (2 Канала)") {
-                LogManager.logOnMain(LogLevel.INFO, "fun setStartDtmf() Остановка DTMF системы", getErrorControl())
-                stopDtmf()
-            }
+    // УПРАВЛЕНИЕ СУБТОНАМИ ДЛЯ СЕЛЕКТИВНОГО ВЫЗОВА
+    private suspend fun playSineWave(frequency: Double) {
+        Log.d("Контрольный лог", "ЗАДАН СУБТОН ЧАСТОТОЙ: $frequency")
+        if (audioTrack == null) {
+            audioTrack = AudioTrack(
+                AudioManager.STREAM_MUSIC,
+                SAMPLE_RATE,
+                AudioFormat.CHANNEL_OUT_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                AudioTrack.getMinBufferSize(SAMPLE_RATE,
+                    AudioFormat.CHANNEL_OUT_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT),
+                AudioTrack.MODE_STREAM
+            )
         }
-    }
 
-    override fun getServiceNumberFlow(): Flow<String> = preferencesRepository.getServiceNumberFlow()
+        withContext(Dispatchers.Default) {
+            if (!isPlaying) {
+                audioTrack?.play()
+                isPlaying = true
 
-    override fun getServiceNumber(): String = preferencesRepository.getServiceNumber()
+                // Размер буфера для генерации звука
+                val bufferSize = SAMPLE_RATE / 10 // 100 мс
+                val buffer = ByteArray(bufferSize * 2)
+                val angleIncrement = 2.0 * Math.PI * frequency / SAMPLE_RATE
+                var angle = 0.0
 
-    override fun setServiceNumber(number: String) = preferencesRepository.setServiceNumber(number)
-
-    override fun getFlashSignalFlow(): Flow<Boolean> = preferencesRepository.getFlashSignalFlow()
-
-    override fun getFlashSignal(): Boolean = preferencesRepository.getFlashSignal()
-
-    override fun setFlashSignal(enabled: Boolean) = preferencesRepository.setFlashSignal(enabled)
-
-    override fun getErrorControlFlow(): Flow<Boolean> = preferencesRepository.getErrorControlFlow()
-
-    override fun getErrorControl(): Boolean = preferencesRepository.getErrorControl()
-
-    override fun setErrorControl(enabled: Boolean) = preferencesRepository.setErrorControl(enabled)
-
-    override fun getNumberAFlow(): Flow<String> = preferencesRepository.getNumberAFlow()
-
-    override fun getNumberA(): String = preferencesRepository.getNumberA()
-
-    override fun setNumberA(number: String) = preferencesRepository.setNumberA(number)
-
-    override fun getNumberBFlow(): Flow<String> = preferencesRepository.getNumberBFlow()
-
-    override fun getNumberB(): String = preferencesRepository.getNumberB()
-
-    override fun setNumberB(number: String) = preferencesRepository.setNumberB(number)
-
-    override fun getNumberCFlow(): Flow<String> = preferencesRepository.getNumberCFlow()
-
-    override fun getNumberC(): String = preferencesRepository.getNumberC()
-
-    override fun setNumberC(number: String) = preferencesRepository.setNumberC(number)
-
-    override fun getNumberDFlow(): Flow<String> = preferencesRepository.getNumberDFlow()
-
-    override fun getNumberD(): String = preferencesRepository.getNumberD()
-
-    override fun setNumberD(number: String) = preferencesRepository.setNumberD(number)
-
-    override fun getModeSelectionFlow() = preferencesRepository.getModeSelectionFlow()
-
-    override fun getModeSelection() = preferencesRepository.getModeSelection()
-
-
-    override fun setModeSelection(value: String) = preferencesRepository.setModeSelection(value)
-
-
-    override fun getOutput1Flow(): Flow<Float> = flow {
-        if (_outputFrequency1.value == null) {
-            try {
-                getOutput1()
-            } catch (ex: Exception) {
-                ex.printStackTrace()
-            }
-        }
-        emitAll(_outputFrequency1.filterNotNull())
-    }
-
-    override fun getOutput1(): Float {
-        return _outputFrequency1.value ?: 0f
-    }
-
-    override fun setOutput1(outputFrequency1: Float) {
-        _outputFrequency1.update { outputFrequency1 }
-        scope.launch {
-            if ((outputFrequency1 == 1750f && getFlashSignal()) && getModeSelection() == "Супертелефон") {
-                if (!isFlashlightOn) {
-                    delay(100)
-                    setFlashlight(true)
-                    isFlashlightOn = true
-                }
-            } else {
-                if (isFlashlightOn) {
-                    delay(100)
-                    setFlashlight(false)
-                    isFlashlightOn = false
+                while (isPlaying) {
+                    for (i in 0 until bufferSize) {
+                        val value = (AMPLITUDE * 32767 * sin(angle)).toInt()
+                        buffer[2 * i] = (value and 0xFF).toByte()
+                        buffer[2 * i + 1] = (value shr 8 and 0xFF).toByte()
+                        angle += angleIncrement
+                        // Убедитесь, что угол не выходит за пределы 0-2π
+                        if (angle >= 2 * Math.PI) angle -= 2 * Math.PI
+                    }
+                    audioTrack?.write(buffer, 0, buffer.size)
                 }
             }
         }
     }
 
-    // Значение основного таймера
-
-    override fun getTimerFlow(): Flow<Long> = flow {
-        emitAll(_timer)
-    }
-
-    override fun getTimer(): Long {
-        return _timer.value
-    }
-
-    override fun setTimer(duration: Long) {
-        // VOX СИСТЕМА отключение вспышки по завершению вызова и также через каждые 30 секунд
-        if ((getModeSelection() == "Репитер (1 Канал)" || getModeSelection() == "Репитер (2 Канала+)") && duration == 0L) {
-            // Проверяем, если вспышка включена, только тогда отключаем
-            if (getFlashlight() == true) {
-                setFlashlight(false)
-            }
+    private fun stopPlayback() {
+        if (isPlaying) {
+            isPlaying = false
+            audioTrack?.stop()
+            audioTrack?.release()
+            audioTrack = null // Освобождаем AudioTrack
         }
-
-        // Отключение громкоговорителя по истечении таймера
-        if (getCallDirection() == CallDirection.DIRECTION_UNKNOWN && duration == 0L) {
-            val audioRoute = getCallAudioRoute()
-            if (audioRoute == CallAudioState.ROUTE_SPEAKER) {
-                disableSpeaker()
-            }
-        }
-        _timer.update { duration }
-    }
-
-    override fun getCallServiceFlow(): Flow<InCallService?> = flow {
-        emitAll(_callService)
-    }
-
-    override fun getCallService(): InCallService? {
-        return _callService.value
-    }
-
-    override fun setCallService(callService: InCallService?) {
-        _callService.update { callService }
-    }
-
-    override fun getCallAudioRouteFlow(): Flow<Int> = flow {
-        emitAll(_callAudioRoute)
-    }
-
-    override fun getCallAudioRoute(): Int {
-        return _callAudioRoute.value
-    }
-
-    override fun setCallAudioRoute(audioRoute: Int) {
-        getCallService()?.setAudioRoute(audioRoute)
-        _callAudioRoute.update { audioRoute }
     }
 
     override fun getCallFlow(): Flow<Call?> = flow {
@@ -442,26 +295,6 @@ class MainRepositoryImpl(
         _call.update { call }
     }
 
-    override fun getCallDirectionFlow(): Flow<Int> = flow {
-        emitAll(_callDirection)
-    }
-
-    override fun getCallDirection(): Int {
-        return _callDirection.value
-    }
-
-    override fun setCallDirection(callDirection: Int) {
-        // VOX СИСТЕМА если состояние вызова сменилась на активное отключаем вспышку
-        if (getModeSelection() == "Репитер (1 Канал)" && callDirection == 2) {
-            if (getFlashlight() == true) {
-                setFlashlight(false)
-            }
-        }
-
-        _callDirection.update { callDirection }
-    }
-
-    // Значение состояния вызова входящий/исходящий/активный/нет вызова
     override fun getCallStateFlow(): Flow<Int> = flow {
         emitAll(_callState)
     }
@@ -471,39 +304,7 @@ class MainRepositoryImpl(
     }
 
     override fun setCallState(callState: Int) {
-        LogManager.logOnMain(LogLevel.INFO, "setCallState() Состояние вызова: ${when (callState) {
-            Call.STATE_DIALING -> "ИСХОДЯЩИЙ ВЫЗОВ (код состояния $callState)"
-            Call.STATE_RINGING -> "ВХОДЯЩИЙ ВЫЗОВ (код состояния $callState)"
-            Call.STATE_HOLDING-> "УДЕРЖАНИЕ ВЫЗОВА (код состояния $callState)"
-            Call.STATE_ACTIVE -> "ВЫЗОВ АКТИВЕН (код состояния $callState)"
-            Call.STATE_DISCONNECTED -> "ВЫЗОВ ЗАВЕРШЕН (код состояния $callState)"
-            else -> "ПРОМЕЖУТОЧНОЕ СОСТОЯНИЕ (код состояния $callState)"
-        }}", getErrorControl())
-
-        // если режим супертелефон и не отсутствие звонка включаем громкоговоритель
-        if (callState != 7 && getModeSelection() == "Супертелефон") enableSpeaker()
         _callState.update { callState }
-    }
-
-    override fun getSpectrumFlow(): Flow<Spectrum> = flow {
-        if (_spectrum.value == null) {
-            try {
-                getSpectrum()
-            } catch (ex: Exception) {
-                ex.printStackTrace()
-            }
-        }
-        emitAll(_spectrum.filterNotNull())
-    }
-
-    // Значения для отрисовки спектра
-
-    override fun getSpectrum(): Spectrum? {
-        return _spectrum.value
-    }
-
-    override fun setSpectrum(spectrum: Spectrum) {
-        _spectrum.update { spectrum }
     }
 
     override fun getKeyFlow(): Flow<Char> = flow {
@@ -525,8 +326,6 @@ class MainRepositoryImpl(
         _key.update { key }
     }
 
-    // Значение инпут которое выводится в основное поле ввода
-
     override fun getInputFlow(): Flow<String> = flow {
         if (_input.value == null) {
             try {
@@ -542,64 +341,30 @@ class MainRepositoryImpl(
         return _input.value
     }
 
-    // Продление времени таймера от нажатия любой кнопки
-    override fun setInput(value: String, withoutTimer: Boolean) {
-        if (getStartDtmf()) {
-            _input.update { value }
-            if (withoutTimer) return
-            setTimer(30000)
-        }
+    override fun setInput(value: String) {
+        _input.update { value }
     }
 
-    // Значение клавиш гарнитуры 79(центральная),25(вверх),24(вниз)
-    override fun getMicKeyClickFlow(): Flow<Int> = flow {
-        if (_micKeyClick.value == null) {
+    override fun getInput1Flow(): Flow<String> = flow {
+        if (_input1.value == null) {
             try {
-                getMicKeyClick()
+                getInput1()
             } catch (ex: Exception) {
                 ex.printStackTrace()
             }
         }
-        emitAll(_micKeyClick.filterNotNull())
+        emitAll(_input.filterNotNull())
     }
 
-    override fun getMicKeyClick(): Int? {
-        return _micKeyClick.value
+    override fun getInput1(): String? {
+        return _input1.value
     }
 
-    override fun setMicKeyClick(value: Int) {
-        _micKeyClick.update { value }
-    }
-
-    override fun getFlashlightFlow(): Flow<Boolean> = flow {
-        if (_flashlight.value == null) {
-            try {
-                getFlashlight()
-            } catch (ex: Exception) {
-                ex.printStackTrace()
-            }
-        }
-        emitAll(_flashlight.filterNotNull())
-    }
-
-    override fun getFlashlight(): Boolean? {
-        return _flashlight.value
-    }
-
-    override fun setFlashlight(value: Boolean) {
-        _flashlight.update { value }
-        try {
-            val cameraId = cameraManager.cameraIdList[0]
-            cameraManager.setTorchMode(cameraId, value)
-            LogManager.logOnMain(LogLevel.INFO, if (value) "setFlashlight() Вспышка включена" else "setFlashlight() Вспышка отключена", getErrorControl())
-        } catch (e: Exception) {
-            LogManager.logOnMain(LogLevel.ERROR, "setFlashlight() Ошибка при управлении вспышкой: ${e.message}", getErrorControl())
-            e.printStackTrace()
-        }
+    override fun setInput1(value: String) {
+        _input1.update { value }
     }
 
     // Значение подключено ли зарядное устройство
-
     override fun getPowerFlow(): Flow<Boolean> = flow {
         if (_powerState.value == null) {
             try {
@@ -616,35 +381,48 @@ class MainRepositoryImpl(
     }
 
     override fun setPower(value: Boolean) {
+        val previousValue = _powerState.value
+        if (previousValue == true && !value) {
+            speakText("Внимание! Произошло отключение питания. Устройство работает от собственного аккумулятора", false)
+        }
+        if (previousValue == false && value) {
+            speakText("Питание устройства возобновлено. Аккумулятор заряжается", false)
+        }
         _powerState.update { value }
     }
 
-    //Значение подключены ли наушники
-
-    override fun getIsConnectFlow(): Flow<Boolean> = flow {
-        if (_isConnect.value == null) {
+    override fun getAmplitudeCheckFlow(): Flow<Boolean> = flow {
+        if (_amplitudeCheck.value == null) {
             try {
-                getIsConnect()
+                getPower()
             } catch (ex: Exception) {
                 ex.printStackTrace()
             }
         }
-        headphoneReceiver(context) { isConnected ->
-            LogManager.logOnMain(LogLevel.INFO, "fun getIsConnect() Наушники${if (isConnected) " подключены" else " отключены"}", getErrorControl())
-            _isConnect.update { isConnected }
-        }
-        emitAll(_isConnect.filterNotNull())
+        emitAll(_amplitudeCheck.filterNotNull())
     }
 
-    override fun getIsConnect(): Boolean {
-        return _isConnect.value ?: false
+    override fun getAmplitudeCheck(): Boolean {
+        return _amplitudeCheck.value ?: true
     }
 
-    override fun setIsConnect(value: Boolean) {
-        _isConnect.update { value }
+    override fun setAmplitudeCheck(value: Boolean) {
+        _amplitudeCheck.update { value }
     }
 
-    // Запись с микрофона в массив для анализа DTMF и работы электронной VOX системы.
+    override fun getSimFlow(): Flow<Int> = flow {
+        emitAll(_sim)
+    }
+
+    override fun getSim(): Int {
+        return _sim.value
+    }
+
+    override fun setSim(value: Int) {
+        _sim.update { value }
+    }
+
+    // Запись с микрофона в массив для анализа DTMF
     @SuppressLint("MissingPermission")
     override suspend fun record() {
         val bufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
@@ -656,51 +434,39 @@ class MainRepositoryImpl(
             bufferSize
         ).also { audio ->
             runCatching {
-                var flashlightOn = false
-                var flashlightStartTime: Long = 0
                 val buffer = ShortArray(blockSize)
                 audio.startRecording()
                 coroutineScope {
-                    LogManager.logOnMain(LogLevel.INFO, "fun record() Запись звука начата", getErrorControl())
+                    var previousAmplitudeCheck = false // Предыдущее состояние флага
                     while (isActive) {
                         val bufferReadSize = audio.read(buffer, 0, blockSize)
                         val dataBlock = DataBlock(buffer, blockSize, bufferReadSize)
                         blockingQueue.put(dataBlock)
-
-                        val maxAmplitude = buffer.take(bufferReadSize).maxOrNull()?.toFloat() ?: 0f
-                        val holdTime = preferencesRepository.getVoxHold()
-                        val threshold = preferencesRepository.getVoxThreshold()
-                        val isSoundDetected = maxAmplitude > threshold
-
-                        if ((isSoundDetected) &&
-                            (getCallDirection() == CallDirection.DIRECTION_ACTIVE || preferencesRepository.getVoxSetting())) {
-
-                            if (!flashlightOn && getModeSelection() == "Репитер (1 Канал)") {
-                                flashlightOn = true
-                                setFlashlight(true)
-                                flashlightStartTime = System.currentTimeMillis()
-                            } else {
-                                flashlightStartTime = System.currentTimeMillis()
-                            }
-                        } else {
-                            if (flashlightOn && (System.currentTimeMillis() - flashlightStartTime >= holdTime)) {
-                                flashlightOn = false
-                                setFlashlight(false)
-                            }
+                        val amplitude = calculateAmplitude(buffer, bufferReadSize)
+                        val currentAmplitudeCheck = amplitude > 0
+                        if (currentAmplitudeCheck != previousAmplitudeCheck) {
+                            setAmplitudeCheck(currentAmplitudeCheck)
+                            previousAmplitudeCheck = currentAmplitudeCheck
                         }
                     }
-                   LogManager.logOnMain(LogLevel.INFO, "fun record() Запись звука остановлена", getErrorControl())
                 }
             }
             audio.stop()
         }
     }
 
+    // Функция для вычисления амплитуды (нужна для теста на блокировку микрофона)
+    private fun calculateAmplitude(buffer: ShortArray, readSize: Int): Double {
+        var sum = 0.0
+        for (i in 0 until readSize) {
+            sum += Math.abs(buffer[i].toDouble())
+        }
+        return sum / readSize
+    }
 
     //Получение данных с блока распознавания
     override suspend fun recognize() {
         coroutineScope {
-            LogManager.logOnMain(LogLevel.INFO, "fun recognize() Алгоритм Фурье запущен", getErrorControl())
             while (isActive) {
                 val dataBlock = blockingQueue.take()
                 val spectrum = dataBlock.FFT()
@@ -711,302 +477,574 @@ class MainRepositoryImpl(
                 clickKey(getInput() ?: "", key)
                 setKey(key)
             }
-            LogManager.logOnMain(LogLevel.INFO, "fun recognize() Алгоритм Фурье остановлен", getErrorControl())
         }
-    }
-
-    // Включение экрана из выключеного положения на 10 секунд
-    override fun wakeUpScreen(context: Context) {
-        LogManager.logOnMain(LogLevel.INFO, "fun wakeUpScreen() Пробуждение ЭКРАНА", getErrorControl())
-        disableDoNotDisturb()
-        setTimer(90000)
-        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-        val screenWakeLock = powerManager.newWakeLock(
-            PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
-            "MyApp:ScreenWakeLock"
-        )
-        screenWakeLock.acquire(10000)
-        screenWakeLock.release()
-        enableDoNotDisturb()
     }
 
     //Основной блок обработки нажатий клавиш
     override fun clickKey(input: String, key: Char?) {
-        // Регулировка громкости в режиме супертелефон
-        if ((input == "A" || input == "B") && getModeSelection() == "Супертелефон") {
-            scope.launch {
-                var adjustment = 0
-                var message = ""
 
-                if (input == "A" && volumeLevel <= 90) {
-                    adjustment = 10
-                    message = "Громкость добавлена и теперь составляет "
-                } else if (input == "B" && volumeLevel >= 50) {
-                    adjustment = -10
-                    message = "Громкость убавлена и теперь составляет "
-                }
-
-                if (adjustment != 0) {
-                    volumeLevel += adjustment
-                    setVolume(volumeLevel)
-                    speakText("$message$volumeLevel процентов")
-                } else {
-                    if (input == "A") {
-                        speakText("Достигнут максимальный уровень громкости")
-                    } else if (input == "B") {
-                        speakText("Достигнут минимальный уровень громкости")
-                    }
+        if (key == ' ') {
+            val cameraId = cameraManager.cameraIdList[0]
+            if (isTorchOn) {
+                cameraManager.setTorchMode(cameraId, false)
+                isTorchOn = false
+                if (isTorchOnIs == 555) {
+                    delayTon1000hz(1500) { playDtmfTones1(1000, 93) }
                 }
                 setInput("")
             }
         }
-
         val previousKey = _key.value
-        // Проверяем, изменился ли ключ
-        if (key != previousKey && !(input.isEmpty() && key == ' ')) {
-            LogManager.logOnMain(LogLevel.INFO, "fun clickKey() input=$input key=$key", getErrorControl())
-        }
 
-        if (input.length > 11 && getCallDirection() != CallDirection.DIRECTION_INCOMING) {
-            speakText("Поле ввода переполнилось, и поэтому было очищенно")
-            flagVoise = getModeSelection() != "Репитер (1 Канал)"
+        if (input.length > 11 && getCallState() == 7) {
+            speakText("Поле ввода переполнилось, и поэтому было очищенно",false)
             setInput("")
         }
 
         if (key != ' ' && key != previousKey) {
-            if (getModeSelection() == "Репитер (2 Канала+)" && getStartDtmf()) {
-                setFlashlight(true)
-                setTimer(30000)
-            }
 
             // Обработка нажатий клавиш быстрого набора
-            if (key in 'A'..'D' && getModeSelection() != "Супертелефон") {
-
-                val currentNumber = when (key) {
-                    'A' -> getNumberA()
-                    'B' -> getNumberB()
-                    'C' -> getNumberC()
-                    'D' -> getNumberD()
-                    else -> ""
-                }
-
-                if (input.length in 3..11) {
-                    if (currentNumber != input) {
-                        when (input) {
-                            getNumberA() -> {
-                                speakText("Этот номер уже закреплен за клавишей А")
-                                setInput("")
-                            }
-                            getNumberB() -> {
-                                speakText("Этот номер уже закреплен за клавишей Б")
-                                setInput("")
-                            }
-                            getNumberC() -> {
-                                speakText("Этот номер уже закреплен за клавишей С")
-                                setInput("")
-                            }
-                            getNumberD() -> {
-                                speakText("Этот номер уже закреплен за клавишей Д")
-                                setInput("")
-                            }
-                            else -> {
-                                scope.launch {
-                                    val callerName = utils.getContactNameByNumber(input, context)
-                                    LogManager.logOnMain(LogLevel.INFO, "clickKey()  Закрепление номера $input за клавишей быстрого набора $key", getErrorControl())
-                                    speakText(if (callerName.isNullOrEmpty()) {
-                                        "Неизвестный номер был закреплен за этой клавишей"
-                                    } else {
-                                        "Номер абонента $callerName был закреплен за этой клавишей"
-                                    })
-                                }
-                                when (key) {
-                                    'A' -> setNumberA(input)
-                                    'B' -> setNumberB(input)
-                                    'C' -> setNumberC(input)
-                                    'D' -> setNumberD(input)
-                                }
-                                setInput("")
-                            }
-                        }
-                    } else {
-                        speakText("Этот номер ранее был закреплен за этой клавишей")
-                    }
-                } else if (getStartDtmf()) {
-                    val number = when (key) {
-                        'A' -> getNumberA()
-                        'B' -> getNumberB()
-                        'C' -> getNumberC()
-                        'D' -> getNumberD()
+            if (key in 'A'..'D' && getCall() == null) {
+                playSoundJob.launch {
+                    delay(200)
+                    val currentNumber = when (key) {
+                        'A' -> numberA
+                        'B' -> numberB
+                        'C' -> numberC
+                        'D' -> numberD
                         else -> ""
                     }
 
-                    if (number.length in 3..11) {
-                        LogManager.logOnMain(LogLevel.INFO, "clickKey()  Подготовка номера $number от клавиши $key к вызову", getErrorControl())
-                        scope.launch {
+                    if (input.length in 3..11) {
+                        if (currentNumber != input) {
+                            when (input) {
+                                numberA -> {
+                                    speakText("Этот номер уже закреплен за клавишей А",false)
+                                    setInput("")
+                                }
+                                numberB -> {
+                                    speakText("Этот номер уже закреплен за клавишей Б",false)
+                                    setInput("")
+                                }
+                                numberC -> {
+                                    speakText("Этот номер уже закреплен за клавишей С",false)
+                                    setInput("")
+                                }
+                                numberD -> {
+                                    speakText("Этот номер уже закреплен за клавишей Д",false)
+                                    setInput("")
+                                }
+                                else -> {
+                                    val num = utils.numberToText(input)
+                                    playSoundJob.launch {
+                                        val callerName = utils.getContactNameByNumber(input, context)
+                                        speakText(if (callerName.isNullOrEmpty()) {
+                                            "Номер $num был закреплен за этой клавишей"
+                                        } else {
+                                            "Номер абонента $callerName был закреплен за этой клавишей"
+                                        },false)
+                                    }
+                                    when (key) {
+                                        'A' -> numberA = input
+                                        'B' -> numberB = input
+                                        'C' -> numberC = input
+                                        'D' -> numberD = input
+                                    }
+                                    setInput("")
+                                }
+                            }
+                        } else {
+                            speakText("Этот номер ранее был закреплен за этой клавишей",false)
+                        }
+                    } else  {
+                        val number = when (key) {
+                            'A' -> numberA
+                            'B' -> numberB
+                            'C' -> numberC
+                            'D' -> numberD
+                            else -> ""
+                        }
+
+                        if (number.length in 3..11) {
                             setInput(number)
+                            val num = utils.numberToText(number)
                             val callerName = utils.getContactNameByNumber(number, context)
-                            speakText(if (callerName.isNullOrEmpty()) {
-                                "Будет выполнен вызов абонента с неизвестным номером"
+
+                            val message = if (callerName.isNullOrEmpty()) {
+                                "Будет выполнен вызов абонента $num"
                             } else {
                                 "Номер абонента $callerName набран"
-                            })
-                            flagSim = false
-                            flagVoise = getModeSelection() != "Репитер (1 Канал)"
-                            delay(7000) // Если уменьшить это время то возникает ошибка в функции ттс и не слышно сообщения выберите с какой сим карты выполнить вызов
+                            }
+
+                            speakText(message,false)
+
+                            // Установка времени задержки в зависимости от сообщения
+                            val delayTime = if (message == "Будет выполнен вызов абонента $num") {
+                                12000
+                            } else {
+                                7000
+                            }
+
+                            delay(delayTime.toDuration(DurationUnit.MILLISECONDS)) // Задержка перед началом вызова
                             DtmfService.callStart(context)
+
+                        } else {
+                            speakText("Клавиша свободна, вы можете закрепить за ней любой номер быстрого набора",false)
                         }
-                    } else {
-                        LogManager.logOnMain(LogLevel.INFO, "clickKey() Нажатие клавиши быстрого набора $key без закрепления номера", getErrorControl())
-                        speakText("Клавиша свободна, вы можете закрепить за ней любой номер быстрого набора")
                     }
-                }
-            } else if (key == '*') {
+                }}
+
+            else if (key == '*') {
 
                 if (input == "") {
-                    speakText("Наберите номер")
-                    flagVoise = !(getModeSelection() == "Репитер (1 Канал)" || getModeSelection() == "Репитер (2 Канала+)")
+                   speakText("Наберите номер", false)
                 }
 
+                // Прием входящего вызова по нажатию звездочки
                 if (getCall() != null) {
-                    if (getCallDirection() == CallDirection.DIRECTION_INCOMING) {
-                        LogManager.logOnMain(LogLevel.INFO, "Вызов функции DtmfService.callAnswer(context) ДЛЯ ПРИЕМА ВХОДЯЩЕГО ВЫЗОВА", getErrorControl())
+                    if (getCallState() == 2) {
                         DtmfService.callAnswer(context)
                         setInput("")
-                        if (textToSpeech.isSpeaking) {
-                            LogManager.logOnMain(LogLevel.INFO, "textToSpeech Принудительная остановка ТТС по нажатию (*)", getErrorControl())
-                            textToSpeech.stop()
-                        }
                     }
                 }
 
                 // Удаленная проверка пропущенного вызова по команде 0*
-                else if (input == "0") {
+                else if (input == "0" && getCall() == null) {
                     utils.lastMissed(context)
-                    setInput("")
-                    flagVoise = false
                 }
 
-                // Удаленный контроль температуры и заряда аккумулятора по команде 1*
-                else if (input == "1") {
-                    utils.batteryStatus(context)
+                // Удаленный контроль температуры и заряда аккумулятора по команде 2*
+                else if (input == "2" && getCall() == null) {
+                    val (temperatureText, levelText) = batteryStatus(context)
+                    speakText("Температура батареи $temperatureText. Заряд батареи $levelText. Зарядное устройство: ${if (getPower()) "Подключено. " else "Не подключено. "} ",false )
                     setInput("")
-                    flagVoise = false
                 }
 
-                // Удаленное сообщение о текущем времени по команде 2*
-                else if (input == "2") {
-                    utils.speakCurrentTime()
+                // Удаленное сообщение о текущем времени по команде 1*
+                else if (input == "1" && getCall() == null) {
+                utils.speakCurrentTime()
                     setInput("")
-                    flagVoise = false
                 }
-
-                // Удаленный контроль уровня сети по команде 3*
-                else if (input == "3") {
-                    utils.getCurentCellLevel(context)
-                    setInput("")
-                    flagVoise = false
-
 
                 // Очистка номеров быстрого набора по команде 4*
-                } else if (input == "4") {
-                    listOf(::setNumberA, ::setNumberB, ::setNumberC, ::setNumberD).forEach { it("") }
+                else if (input == "3" && getCall() == null) {
+                    textToSpeech.setOnUtteranceProgressListener(null)
+                    numberA = ""
+                    numberB = ""
+                    numberC = ""
+                    numberD = ""
+                    lastDialedNumber = ""
                     setInput("")
-                    speakText("Все номера быстрого набора, были очищены")
-                    flagVoise = false
+                    speakText("Все номера быстрого набора, были очищены", false)
+
+
+                }
 
                 // Голосовой поиск абонента в телефонной книге по команде 5*
-                } else if (input == "5") {
-                    LogManager.logOnMain(LogLevel.INFO, "ЗАПУСК ГОЛОСОВОГО ПОИСК", getErrorControl())
-                    scope.launch {
+                else if (input == "5" && getCall() == null) {
+                    playSoundJob.launch {
                         if (utils.isOnline(context)) {
-                            speakText("Назовите имя абонента которому вы хотите позвонить")
+                            speakText("Назовите имя абонента которому вы хотите позвонить", false)
                             setInput("")
-                            flagVoise = true // Вспышка останется включенной после произнесения
                             delay(7000)
-                            // Переключаемся на основной поток
+                            // Переключаемся на основной поток так как нажатие кнопок с радиостанции обрабатывается в корутине рекогнайзер
                             withContext(Dispatchers.Main) {
-                                if (getStartDtmf()) {
-                                    LogManager.logOnMain(LogLevel.INFO, "fun setStartDtmf() Остановка DTMF системы", getErrorControl())
-                                    stopDtmf()
+                                stopDtmf()
+                                utils.startSpeechRecognition(context) { result ->
+                                   startDtmf()
+                                    setInput1("")
+                                    if (result != null) {
+                                        utils.getNameContact(result, context)
+                                    } else {
+                                        speakText("Не удалось распознать сказанное. Попробуйте еще раз", false)
+                                        setInput1("")
+                                    }
                                 }
-                                setFlashlight(true)
-                                utils.startSpeechRecognition(context)
-                                flagVoise = false
+
                             }
                         } else {
-                            speakText("Отсутствует интернет. Голосовой поиск не доступен")
+                            speakText("Отсутствует интернет. Голосовой поиск не доступен",false)
                             setInput("")
-                            flagVoise = false
+                            setInput1("")
                         }
                     }
                 }
 
-
-                if (getCall() == null && input.length in 3..11) {
-                    LogManager.logOnMain(LogLevel.INFO, "Вызов функции DtmfService.callStart(context) ДЛЯ ОСУЩЕСТВЛЕНИЯ ИСХОДЯЩЕГО ВЫЗОВА", getErrorControl())
-                    setInput(input)
-                    DtmfService.callStart(context)
+                // Настройка VOX !!!КОНТРОЛЬНОЕ ПРЕДЛОЖЕНИЕ НЕ МЕНЯТЬ ТАК КАК ПОД НЕГО НАПИСАНА ДИАГРАММА НАСТРОЙКИ VOX!!!
+                else if (input == "11" && getCall() == null) {
+                    textToSpeech.setOnUtteranceProgressListener(null)
+                    setInput("")
+                    speakText("Один. Два. Три. Четыре. Пять. Поверка работоспособности вокс системы. Шесть. Семь. Восемь. Девять. Десять.", false)
                 }
 
-                } else if ((input.length in 3..11 && (key == '1' || key == '2')) && flagSim) {
-                setInput(input)
-                val operatorName = when (key) {
-                    '1' -> slotSim1
-                    '2' -> slotSim2
-                    else -> return
-                }
+                // Настройка VOX
+                else if (input == "22" && getCall() == null) {
+                    playSoundJob.launch {
+                        speakText("Установите время удержания в мили секундах на которое требуется настроить вокс", false)
+                        setInput("")
+                        delay(15000)
+                        periodVox = getInput()?.toLongOrNull() ?: 2500
+                        if (periodVox < 4000) {
+                            speakText("Период следования настроен на $periodVox длительность на $durationVox", false)
+                        } else speakText("Ожидается значение от 0 до 4000 милисекунд", false)
 
-                val operatorNameResolved = resolveOperatorName(operatorName)
-
-                scope.launch {
-                    isButtonPressed = true
-                    sim = if (key == '1') 0 else 1
-                    speakText("Звоню с $operatorNameResolved")
-                    flagVoise = true
-                    delay(5000)
-                    if (getModeSelection() == "Репитер (1 Канал)") {
-                        setFlashlight(true)
+                        delay(10000)
+                        playDtmfTones(periodVox - 100, durationVox)
+                        setInput("")
                     }
-                    DtmfService.callStartSim(context, isButtonPressed, sim)
-                    flagSim = false
                 }
+
+                // Настройка VOX
+                else if (input == "33" && getCall() == null) {
+                    playDtmfTones(periodVox + 100, durationVox)
+                    setInput("")
+                }
+
+                else if (input == "55" && getCall() == null) {
+                    setInput("")
+                    playSoundJob.launch {
+                       // playSineWave(165.5)
+                        playSineWave(500.0)
+                         speakText("ПЕРВАЯ РАЦИЯ", false)
+                    }
+                }
+
+                else if (input == "56" && getCall() == null) {
+                    setInput("")
+                    playSoundJob.launch {
+                      //  playSineWave(123.0)
+                        playSineWave(1000.0)
+                        speakText("ВТОРАЯ РАЦИЯ", false)
+                    }
+                }
+
+                else if (input == "57" && getCall() == null) {
+                    playSoundJob.launch {
+                        stopPlayback()
+                        setInput("")
+                    }
+                }
+
+                else if (input == "44" || flagVox) {
+                    playSoundJob.launch {
+                        if (!flagVox) { speakText("Введите длительность тона в милисекундах", false) }
+                        setInput("")
+                        flagVox = true
+                        delay(10000)
+                        durationVox = getInput()?.toLongOrNull() ?: 50
+                        if (durationVox > 500)  {
+                            speakText("Ожидается значение от 0 до 500 милисекунд", false)
+                            setInput("")
+                            flagVox = false
+                        } else  {
+                            delay(5000)
+                            playDtmfTones1(durationVox, 0)
+                            delay(5000)
+                            setInput("")
+                            flagVox = false
+                            speakText("Был проигран тон с длительностью $durationVox милисекунд", false)
+                        }
+                    }
+                }
+
+                // Проигрывание DTMF тонов от 0 до 9
+                else if (input == "66" && getCall() == null) {
+                    delayTon1000hz(1500) { playDtmfTones(200, 200) }
+                    setInput("")
+                }
+
+                // Удаленная проверка последнего СМС по команде 9*
+                else if (input == "4" && getCall() == null) {
+                    val smsText =  utils.getLastIncomingSms(context)
+                    speakText("$smsText",false)
+                    setInput("")
+                }
+
+                // Установка времени тона активации
+                else if (input == "99" && getCall() == null) {
+                    setInput("")
+                    playSoundJob.launch {
+                        speakText("Введите длительность тона активации", false)
+                        delay(14000) // При значении 14 секунд времени хватает на то чтобы успеть ввести значение
+                        val activationTimeInput = getInput()
+                        val activationTime = activationTimeInput?.toLongOrNull()
+                        if (activationTime != null && activationTime in 0..2000) {
+                            voxActivation = activationTime
+                            speakText("Длительность тона установлена на $activationTimeInput миллисекунд", false)
+                        } else {
+                            speakText("Ожидается значение от нуля до двух тысяч", false)
+                        }
+                        setInput("")
+                    }
+                }
+
+                // Команда на увеличение громкости звонка
+                else if (input == "88" && getCall() == null) {
+                    if (volumeLevelCall < 100) {
+                        val step = if (volumeLevelCall < 30) 1 else 10
+                        volumeLevelCall += step
+                        setVolumeCall(volumeLevelCall)
+                        if (volumeLevelCall > 100) {
+                            volumeLevelCall = 100
+                        }
+                        speakText("Громкость вызова увеличена и теперь составляет $volumeLevelCall процентов", false)
+                    } else {
+                        speakText("Достигнут максимальный уровень громкости", false)
+                    }
+                    setInput("")
+                }
+
+                // Команда на увеличение громкости
+                else if (input == "77" && getCall() == null) {
+                    if (volumeLevelTts < 100) {
+                        val step = if (volumeLevelTts < 30) 1 else 10
+                        volumeLevelTts += step
+                        setVolumeTts(volumeLevelTts)
+                        if (volumeLevelTts > 100) {
+                            volumeLevelTts = 100
+                        }
+                        speakText(
+                            "Громкость речевых сообщений увеличена и теперь составляет $volumeLevelTts процентов",
+                            false
+                        )
+                    } else {
+                        speakText("Достигнут максимальный уровень громкости", false)
+                    }
+                    setInput("")
+                }
+
+                // Блок выполнения исходящего вызова по нажатию звездочки
+                else if (getCall() == null && input.length in 3..11) {
+                    setSim(5)
+                    DtmfService.callStart(context)
+                    setInput1(getInput().toString())
+                }
+            }
+
+            // Блок выполнения действий над набранным номером
+            else if (getInput1()?.length in 3..11) {
+
+                if (key == '#') {
+                    setInput("")
+                    setInput1("")
+                    if (!isSpeaking) {
+                        speakText("Номеронабиратель, очищен", false)
+                    }
+                }
+
+                if (key == '1' && getCall() == null) {
+                        setSim(0)
+                        setInput(getInput1().toString())
+                        DtmfService.callStart(context)
+                        setInput1("")
+
+                }
+
+                else if (key == '2' && getCall() == null) {
+                        setSim(1)
+                        setInput(getInput1().toString())
+                        DtmfService.callStart(context)
+                        setInput1("")
+                }
+
+                else if (key == '4' && getCall() == null) {
+                    playSoundJob.launch {
+                        if (utils.isOnline(context)) {
+                            speakText("Произнесите сообщение, которое вы хотите отправить на этот номер", false)
+                            setInput("")
+                            delay(10000)
+                            // Переключаемся на основной поток так как нажатие кнопок с радиостанции обрабатывается в корутине рекогнайзер
+                            withContext(Dispatchers.Main) {
+                                stopDtmf()
+                                utils.startSpeechRecognition(context) { result ->
+                                    startDtmf()
+                                    if (result != null) {
+                                        if (result.length > 70) {
+                                            speakText("Сообщение слишком длинное", false)
+                                            setInput1("")
+                                        } else {
+                                            val phoneNumber = getInput1()
+                                            setInput1("")
+                                            if (phoneNumber?.length == 11) {
+                                                // Отправляем SMS
+                                                val isSent = utils.sendSms(context, phoneNumber, result)
+                                                if (isSent) {
+                                                    val number = utils.numberToText(phoneNumber)
+                                                    speakText("Сообщение \"$result\" успешно отправлено на номер $number ", false)
+                                                    setInput1("")
+                                                } else {
+                                                    speakText("Не удалось отправить сообщение", false)
+                                                    setInput1("")
+                                                }
+                                            } else {
+                                                speakText("Номер телефона должен содержать 11 цифр", false)
+                                                setInput1("")
+                                            }
+                                        }
+                                    } else {
+                                        speakText("Не удалось распознать сказанное. Попробуйте еще раз", false)
+                                        setInput1("")
+                                    }
+                                }
+                            }
+                        } else {
+                            speakText("Отсутствует интернет. Отправка сообщения не возможна", false)
+                            setInput("")
+                        }
+                    }
+                    return
+                }
+
+                else if (key == '5' && getCall() == null) {
+                    playSoundJob.launch {
+                        if (utils.isOnline(context)) {
+                            speakText("Произнесите фамилию и имя абонента, которого Вы хотите добавить в телефонную книгу", false)
+                            setInput("")
+                            delay(10000)
+                            // Переключаемся на основной поток так как нажатие кнопок с радиостанции обрабатывается в корутине рекогнайзер
+                            withContext(Dispatchers.Main) {
+                                    stopDtmf()
+                                utils.startSpeechRecognition(context) { result ->
+                                    startDtmf()
+                                    if (result != null) {
+                                        if (result.length > 25) {
+                                            speakText("Слишком длинное имя контакта", false)
+                                            setInput1("")
+                                        } else {
+                                            val phoneNumber = getInput1()
+                                            setInput1("")
+                                            if (phoneNumber?.length == 11) {
+                                                utils.saveContact(phoneNumber, result, context)
+                                                val number = utils.numberToText(phoneNumber)
+                                                speakText("Контакт $result с номером $number успешно добавлен в телефонную книгу", false)
+                                                setInput1("")
+                                            }
+                                        }
+                                    } else {
+                                        speakText("Не удалось распознать сказанное. Попробуйте еще раз", false)
+                                        setInput1("")
+                                    }
+                                }
+                            }
+                        } else {
+                            speakText("Отсутствует интернет. Не получится сохранить контакт в телефонной книге", false)
+                            setInput("")
+                        }
+                    }
+                    return
+                } else setInput1("")
             }
 
             // Остановка вызова если он есть а если нету то очистка поля ввода
             else if (key == '#') {
+                textToSpeech.stop()
                 isSpeaking = false
-                flagSim = false
+                when {
+                    getCall() == null -> {
+                        setInput("")
 
-                // Проверяем, работает ли TTS перед остановкой
-                if (textToSpeech.isSpeaking) {
-                    LogManager.logOnMain(LogLevel.INFO, "textToSpeech Принудительная остановка ТТС по нажатию (#)", getErrorControl())
-                    textToSpeech.stop()
+                        // Голосовой поиск абонента в телефонной книге по команде 5# с последующим удалением
+                        if (input == "5" && getCall() == null) {
+                            playSoundJob.launch {
+                                if (utils.isOnline(context)) {
+                                    speakText("Назовите фамилию и имя абонента которого вы хотите удалить с телефонной книги", false)
+                                    setInput("")
+                                    delay(10000)
+                                    // Переключаемся на основной поток так как нажатие кнопок с радиостанции обрабатывается в корутине рекогнайзер
+                                    withContext(Dispatchers.Main) {
+                                        stopDtmf()
+                                        utils.startSpeechRecognition(context) { result ->
+                                            startDtmf()
+                                            if (result != null) {
+                                                val isDeleted = utils.deleteContactByName(result, context)
+                                                if (isDeleted) {
+                                                    speakText("Контакт $result успешно удален из телефонной книги", false)
+                                                    setInput1("")
+                                                } else {
+                                                    speakText("Контакта $result нет в вашей телефонной книге. Проверьте правильность имени.", false)
+                                                    setInput1("")
+                                                }
+                                            } else {
+                                                speakText("Не удалось распознать сказанное. Попробуйте еще раз", false)
+                                                setInput1("")
+                                            }
+                                        }
+
+                                    }
+                                } else {
+                                    speakText("Отсутствует интернет. Голосовой поиск не доступен",false)
+                                    setInput1("")
+                                    setInput("")
+                                }
+                            }
+                        }
+
+                        // Команда на уменьшение громкости звонка
+                        if (input == "88" && getCall() == null) {
+                            if (volumeLevelCall > 0) {
+                                val step = if (volumeLevelCall <= 30) 1 else 10
+                                volumeLevelCall -= step
+                                setVolumeCall(volumeLevelCall)
+                                if (volumeLevelCall < 0) {
+                                    volumeLevelCall = 0
+                                }
+                                speakText("Громкость звонка уменьшена и теперь составляет $volumeLevelCall процентов", false)
+                            } else {
+                                speakText("Достигнут минимальный уровень громкости", false)
+                            }
+                            setInput("")
+                        }
+
+                        // Команда на уменьшение громкости ттс
+                        else if (input == "77" && getCall() == null) {
+                            if (volumeLevelTts > 0) {
+                                val step = if (volumeLevelTts <= 30) 1 else 10
+                                volumeLevelTts -= step
+                                setVolumeTts(volumeLevelTts)
+                                if (volumeLevelTts < 0) {
+                                    volumeLevelTts = 0
+                                }
+                                speakText("Громкость речевых сообщений уменьшена и теперь составляет $volumeLevelTts процентов", false)
+                            } else {
+                                speakText("Достигнут минимальный уровень громкости", false)
+                            }
+                            setInput("")
+                        } else {
+                            if (!isSpeaking) {
+                                speakText("Номеронабиратель, очищен", false)
+                            }
+                        }
+
+                    }
+                    else -> {
+                        DtmfService.callEnd(context)
+                    }
                 }
-
-                if (getCall() == null) {
-                    setInput("")
-                    speakText("Номеронабиратель, очищен")
-                    flagVoise = !(getModeSelection() == "Репитер (1 Канал)" || getModeSelection() == "Репитер (2 Канала+)")
+            }
+            else {
+                if (key != 'E') {
+                    setInput(input + key)
                 } else {
-                    DtmfService.callEnd(context)
+                    val cameraId = cameraManager.cameraIdList[0]
+                    if (!isTorchOn) {
+                        cameraManager.setTorchMode(cameraId, true)
+                        isTorchOn = true
+                        if (getInput() == "000" || getInput() == "555") {
+                            getInput()?.toIntOrNull()?.let {
+                                isTorchOnIs = it
+                            }
+                        }
+                    }
                 }
-            } else {
-                setInput(input + key)
             }
         }
     }
 
     // Запуск дтмф анализа
     override fun startDtmf() {
-        setVolume(70)
-        if (getModeSelection() == "Репитер (2 Канала)") {
-            if (getFlashlight() == false) setFlashlight(true)
-        }
-        _isDTMFStarted.update { true }
         DtmfService.start(context)
         initJob()
         setInput("")
-        setTimer(30000)
         recorderJob.launch { record() }
         recognizerJob.launch { recognize() }
     }
@@ -1016,7 +1054,6 @@ class MainRepositoryImpl(
         scope = CoroutineScope(Dispatchers.IO + job)
         recorderJob = scope
         recognizerJob = scope
-        flashlightJob = scope
         playSoundJob = scope
     }
 
@@ -1024,136 +1061,72 @@ class MainRepositoryImpl(
     override fun stopDtmf() {
         setInput("")
         isSpeaking = false
-        flagSim = false
-        _isDTMFStarted.update { false }
         job.cancel()
-        setFlashlight(false)
         audioRecord?.stop()
         audioRecord = null
-        textToSpeech.stop()
         blockingQueue.clear()
         recognizer.clear()
         DtmfService.stop(context)
-        setTimer(0)
-    }
-
-    // Конвертация названий операторов
-    private fun resolveOperatorName(operatorName: String?): String {
-        return when (operatorName) {
-            "ACTIV" -> "Актив"
-            "ALTEL" -> "Алтэл"
-            "MTS" -> "МТС"
-            "Beeline KZ" -> "Билайн"
-            "Megafon" -> "Мегафон"
-            "Tele2" -> "Теле2"
-            else -> operatorName ?: "Неизвестный оператор"
-        }
-    }
-
-    // Диалоги выбора и озвучивания сим карт
-    override fun selectSimCard(slot1: String?, slot2: String?, phoneAccount: Int) {
-        LogManager.logOnMain(LogLevel.INFO, "selectSimCard() Слот 1 $slot1 Слот 2 $slot2 Количество активных аккаунтов $phoneAccount", getErrorControl())
-        scope.launch {
-            if (getCallDirection() != CallDirection.DIRECTION_INCOMING && phoneAccount > 1) {
-                if (!flagSim) {
-                    setFlashlight(true)
-                    speakText("Выберите с какой сим карты выполнить вызов")
-                    flagVoise = false // Вспышка отключится после произнесения
-                } else LogManager.logOnMain(LogLevel.ERROR, "СБОЙ ПРОИЗНЕСЕНИЯ Выберите с какой сим карты выполнить вызов. Значение флага flagSim=$flagSim", getErrorControl())
-                flagSim = true
-            } else {
-                // Обработка случаев, когда в телефоне активна только одна сим-карта
-                val operatorName = when {
-                    slot1 == "Нет сигнала" && getCallDirection() == CallDirection.DIRECTION_UNKNOWN -> slot2
-                    slot2 == "Нет сигнала" && getCallDirection() == CallDirection.DIRECTION_UNKNOWN -> slot1
-                    else -> null
-                }
-
-                operatorName?.let {
-                    isButtonPressed = true
-                    val operatorDisplayName = resolveOperatorName(it)
-                    speakText("Звоню с $operatorDisplayName")
-                    flagVoise = true // Вспышка останется включенной после произнесения
-                    delay(5000)
-                    if (getModeSelection() == "Репитер (1 Канал)") {
-                        setFlashlight(true)
-                    }
-                    DtmfService.callStartSim(context, isButtonPressed, 0)
-                    isButtonPressed = false
-                    flagSim = false
-                }
-            }
-            slotSim1 = slot1
-            slotSim2 = slot2
-        }
     }
 
     // Основная функция озвучивания входящих вызовов
     override suspend fun speakSuperTelephone() {
         isSpeaking = false
-        LogManager.logOnMain(LogLevel.INFO, "speakSuperTelephone() Озвучивание входящего вызова", getErrorControl())
-        flagVoise = getModeSelection() != "Репитер (1 Канал)"
         delay(500) // без этой задержки не получалось корректное значение callerNumber
         val callerNumber = (_input.value).toString()
         if (callerNumber.isEmpty()) {
-            LogManager.logOnMain(LogLevel.ERROR, "fun speakSuperTelephone() Ошибка извлечения имени из телефонной книги", getErrorControl())
-                speakText("Ошибка извлечения имени из телефонной книги")
+            speakText("Ошибка извлечения имени из телефонной книги", false)
         } else {
             val callerName = utils.getContactNameByNumber(callerNumber, context)
-            while (getCallDirection() == CallDirection.DIRECTION_INCOMING) {
+            while (getCallState() == 2) {
                 val message = if (callerName.isNullOrEmpty()) {
                     "Внимание! Вам звонит абонент, имени которого нет в телефонной книге. Примите или отклоните вызов"
                 } else {
                     "Внимание! Вам звонит абонент $callerName. Примите или отклоните вызов"
                 }
-                speakText(message)
-                delay(if (getModeSelection() == "Супертелефон") 17000 else 13000)
+                speakText(message, false)
+                delay(17000)
+
             }
         }
     }
 
-    override fun speakText(text: String) {
-        LogManager.logOnMain(LogLevel.INFO, "speakText() ЗНАЧЕНИЕ ФЛАГОВ flagVoise=$flagVoise, isSpeaking=$isSpeaking", getErrorControl())
-        if (isSpeaking) { // Если ттс не завершил произношение или не сработали фукции onDone или onError
-            LogManager.logOnMain(LogLevel.ERROR, "fun speakText() СБОЙ РАБОТЫ ТТС. Выход по флагу isSpeaking=$isSpeaking последующая команда приходит когда еще не завершена предыдущая, слишком частое поступление запросов на произнесение", getErrorControl())
-            return
+    override fun speakText(text: String, flagVoise: Boolean) {
+        if (isSpeaking) { return }
+
+        textToSpeech = TextToSpeech(context.applicationContext) { status ->
+            if (status == TextToSpeech.SUCCESS) { textToSpeech.language = Locale.getDefault() }
+
+            isSpeaking = true
+
+            textToSpeech.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) {}
+
+                override fun onDone(utteranceId: String?) {
+                    isSpeaking = false
+                    textToSpeech.setOnUtteranceProgressListener(null)
+                    textToSpeech.stop()
+                    textToSpeech.shutdown()
+                }
+
+                override fun onError(utteranceId: String?) {}
+            })
+
+            val utteranceId = System.currentTimeMillis().toString()
+
+            CoroutineScope(Dispatchers.Main).launch {
+                if (text != "Один. Два. Три. Четыре. Пять. Поверка работоспособности вокс системы. Шесть. Семь. Восемь. Девять. Десять.") {
+                    delayTon1000hz(1500) { textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId) }
+                }  else {
+                    delay(1500)
+                    textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+                }
+            }
         }
-
-        isSpeaking = true // Устанавливаем флаг, что TTS запущен
-        val weakTextToSpeech = WeakReference(textToSpeech)
-
-        weakTextToSpeech.get()?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) {
-                LogManager.logOnMain(LogLevel.INFO, "fun speakText() НАЧАТО Произнесение текста \"$text\"", getErrorControl())
-                // VOX СИСТЕМА включаем вспышку при старте сообщения ттс
-                if (getModeSelection() == "Репитер (1 Канал)") {
-                    setFlashlight(true)
-                }
-            }
-
-            override fun onDone(utteranceId: String?) {
-                LogManager.logOnMain(LogLevel.INFO, "fun speakText() ЗАВЕРШЕНО Произнесение текста \"$text\"", getErrorControl())
-                // VOX СИСТЕМА выключаем вспышку при остановке сообщения ттс
-                if ((getModeSelection() == "Репитер (1 Канал)" || getModeSelection() == "Репитер (2 Канала+)") && !flagVoise) {
-                    setFlashlight(false)
-                }
-                isSpeaking = false // Сбрасываем флаг, когда TTS завершено
-            }
-
-            @Deprecated("Этот метод устарел")
-            override fun onError(utteranceId: String?) {
-                LogManager.logOnMain(LogLevel.ERROR, "fun speakText() Ошибка при произнесении текста: $utteranceId", getErrorControl())
-                isSpeaking = false // Сбрасываем флаг в случае ошибки
-            }
-        })
-
-        val utteranceId = System.currentTimeMillis().toString()
-        delayTon1000hz { weakTextToSpeech.get()?.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId) }
     }
 }
 
-
 //  Log.d("Контрольный лог", "setStartFlashlight ВЫЗВАНА: $conType")
-// context.startActivity(Intent(Intent.ACTION_POWER_USAGE_SUMMARY).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+
 
 

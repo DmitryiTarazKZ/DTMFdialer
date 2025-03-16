@@ -40,6 +40,10 @@ span {
     color: green
 }
 
+.orange {
+      color: orange;
+}
+
 p:last-of-type {
     margin: 0;
 }

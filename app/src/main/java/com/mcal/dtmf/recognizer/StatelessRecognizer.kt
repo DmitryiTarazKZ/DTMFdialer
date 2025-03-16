@@ -1,61 +1,67 @@
 package com.mcal.dtmf.recognizer
 
-
-import android.util.Log
 import com.mcal.dtmf.data.repositories.main.MainRepository
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 
-
-// главный массив по которому происходит сравнение частот и присвоение соответствующего символа
-// Эти величины от 45 до 106 соответствуют вертикальным строкам отрисовки спектра
-// в MainScreen участки попадающие в дтмф диапазон выделены синим
-class StatelessRecognizer(private val spectrum: Spectrum): KoinComponent {
-    private val mainRepository: MainRepository by inject() // инжектирование репозитория
-    private val tones = mutableListOf(
-        Tone(45, 77, '1'),// 45=697гц  77=1209гц
-        Tone(45, 86, '2'),// 45=697гц  86=1336гц
-        Tone(45, 95, '3'),// 45=697гц  95=1477гц
-        Tone(49, 77, '4'),// 49=770гц  77=1209гц
-        Tone(49, 86, '5'),// 49=770гц  86=1336гц
-        Tone(49, 95, '6'),// 49=770гц  95=1477гц
-        Tone(55, 77, '7'),// 55=852гц  77=1209гц
-        Tone(55, 86, '8'),// 55=852гц  86=1336гц
-        Tone(55, 95, '9'),// 55=852гц  95=1477гц
-
-        Tone(60, 77, '*'),// 60=941гц  77=1209гц
-        Tone(60, 86, '0'),// 60=941гц  86=1336гц
-        Tone(60, 95, '#'),// 60=941гц  95=1477гц
-
-        Tone(45, 106, 'A'),// 45=697гц  106=1633гц
-        Tone(49, 106, 'B'),// 49=770гц  106=1633гц
-        Tone(55, 106, 'C'),// 55=852гц  106=1633гц
-        Tone(60, 106, 'D'),// 60=941гц  106=1633гц
+class StatelessRecognizer(private val spectrum: Spectrum) : KoinComponent {
+    // Массив частот и соответствующих символов
+    private val tones = listOf(
+        Pair(45 to 77, '1'), // DTMF tone for key 1: 1209Hz, 697Hz, continuous
+        Pair(45 to 86, '2'), // DTMF tone for key 2: 1336Hz, 697Hz, continuous
+        Pair(45 to 95, '3'), // DTMF tone for key 3: 1477Hz, 697Hz, continuous
+        Pair(49 to 77, '4'), // DTMF tone for key 4: 1209Hz, 770Hz, continuous
+        Pair(49 to 86, '5'), // DTMF tone for key 5: 1336Hz, 770Hz, continuous
+        Pair(49 to 95, '6'), // DTMF tone for key 6: 1477Hz, 770Hz, continuous
+        Pair(55 to 77, '7'), // DTMF tone for key 7: 1209Hz, 852Hz, continuous
+        Pair(55 to 86, '8'), // DTMF tone for key 8: 1336Hz, 852Hz, continuous
+        Pair(55 to 95, '9'), // DTMF tone for key 9: 1477Hz, 852Hz, continuous
+        Pair(60 to 77, '*'), // DTMF tone for key *: 1209Hz, 941Hz, continuous
+        Pair(60 to 86, '0'), // DTMF tone for key 0: 1336Hz, 941Hz, continuous
+        Pair(60 to 95, '#'), // DTMF tone for key #: 1477Hz, 941Hz, continuous
+        Pair(45 to 106, 'A'), // DTMF tone for key A: 1633Hz, 697Hz, continuous
+        Pair(49 to 106, 'B'), // DTMF tone for key B: 1633Hz, 770Hz, continuous
+        Pair(55 to 106, 'C'), // DTMF tone for key C: 1633Hz, 852Hz, continuous
+        Pair(60 to 106, 'D')  // DTMF tone for key D: 1633Hz, 941Hz, continuous
     )
 
     fun getRecognizedKey(): Char {
-        val lowFragment = SpectrumFragment(0, 75, spectrum)// фрагмент выходной частоты в диапазоне от 15гц до 1187гц
-        val highFragment = SpectrumFragment(75, 150, spectrum
-        )// фрагмент выходной частоты в диапазоне от 1187гц до 2330гц
-        val fragment = SpectrumFragment(0, 500, spectrum)// весь спектр в диапазоне от 15гц до 7.8кгц
-        val lowMax = lowFragment.getMax()
-        val highMax = highFragment.getMax()
-        val outputFrequency = fragment.getMax() * 15.625f
-        // истинная выходная частота в диапазоне от 15гц до 7.8кгц с шагом 15.625гц
-        mainRepository.setOutput1(outputFrequency) //передача инжектированной переменной в репозиторий
-        val allSpectrum = SpectrumFragment(0, 150, spectrum)
-        val max = allSpectrum.getMax()
-        if (max != lowMax && max != highMax) {
+        val lowMax = getMax(0, 75)
+        val highMax = getMax(75, 150)
+        val outputFrequency = getMax(0, 500) * 15.625f
+
+        // Проверка на частоту 1750 Гц
+        if (outputFrequency == 1750f) {
+            return 'E'
+        }
+
+        val allMax = getMax(0, 150)
+        if (allMax != lowMax && allMax != highMax) {
             return ' '
         }
 
-        for (t in tones) {
-            if (t.match(lowMax, highMax)) {
-                return t.key
-
+        for (tone in tones) {
+            val (lowFrequency, highFrequency) = tone.first
+            if (matchFrequency(lowMax, lowFrequency) && matchFrequency(highMax, highFrequency)) {
+                return tone.second
             }
         }
         return ' '
     }
-}
 
+    private fun getMax(start: Int, end: Int): Int {
+        var max = 0
+        var maxValue = 0.0
+        for (i in start..end) {
+            if (maxValue < spectrum[i]) {
+                maxValue = spectrum[i]
+                max = i
+            }
+        }
+        return max
+    }
+
+    private fun matchFrequency(frequency: Int, frequencyPattern: Int): Boolean {
+        return (frequency - frequencyPattern) * (frequency - frequencyPattern) < 4
+    }
+}

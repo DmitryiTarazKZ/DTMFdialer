@@ -39,6 +39,9 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1,versions/9/previous-compilation-data.bin}"
+            excludes += "/META-INF/io.netty.versions.properties"
+            // Добавляем исключение для INDEX.LIST
+            excludes += "/META-INF/INDEX.LIST"
         }
     }
 }
@@ -62,3 +65,4 @@ dependencies {
 
     debugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")
 }
+

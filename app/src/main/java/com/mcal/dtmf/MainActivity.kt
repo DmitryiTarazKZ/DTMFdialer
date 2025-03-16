@@ -1,26 +1,18 @@
 package com.mcal.dtmf
 
 import android.Manifest
-import android.Manifest.permission.ANSWER_PHONE_CALLS
-import android.Manifest.permission.CALL_PHONE
-import android.Manifest.permission.POST_NOTIFICATIONS
-import android.Manifest.permission.READ_PHONE_STATE
-import android.Manifest.permission.RECORD_AUDIO
-import android.Manifest.permission.WRITE_EXTERNAL_STORAGE
 import android.app.role.RoleManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.media.AudioManager
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
-import com.mcal.dtmf.utils.LogManager
-import com.mcal.dtmf.data.repositories.main.LogLevel
-import android.telecom.Call
 import android.telecom.TelecomManager
-import android.view.KeyEvent
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
@@ -34,7 +26,6 @@ import cafe.adriel.voyager.navigator.Navigator
 import cafe.adriel.voyager.transitions.SlideTransition
 import com.mcal.dtmf.data.repositories.main.MainRepository
 import com.mcal.dtmf.receiver.BootReceiver
-import com.mcal.dtmf.service.DtmfService
 import com.mcal.dtmf.ui.main.MainScreen
 import com.mcal.dtmf.ui.theme.VoyagerDialogTheme
 import org.koin.android.ext.android.inject
@@ -43,109 +34,36 @@ import org.koin.android.ext.android.inject
 class MainActivity : ComponentActivity() {
     private val mainRepository: MainRepository by inject()
     private val permissionCode = 100
-    private var previousChargeState: String? = null
     private val powerReceiver: BroadcastReceiver = object : BootReceiver() {
-
         override fun onReceive(context: Context, intent: Intent?) {
             intent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1)?.let { chargePlug ->
                 val usbCharge = chargePlug == BatteryManager.BATTERY_PLUGGED_USB
                 val acCharge = chargePlug == BatteryManager.BATTERY_PLUGGED_AC
                 val wirelessCharge = chargePlug == BatteryManager.BATTERY_PLUGGED_WIRELESS
-                val isCharging = usbCharge || acCharge || wirelessCharge
-
-                // Определяем текущее состояние
-                val currentState = when {
-                    usbCharge -> "По USB"
-                    acCharge -> "От сети"
-                    wirelessCharge -> "Wireless"
-                    else -> "Отключена"
-                }
-
-                // Логируем только если состояние изменилось
-                if (currentState != previousChargeState) {
-                    mainRepository.setPower(isCharging)
-                    LogManager.logOnMain(LogLevel.INFO, "fun powerReceiver() Зарядка: $currentState", mainRepository.getErrorControl())
-                    previousChargeState = currentState
-                }
+                val currentlyCharging = usbCharge || acCharge || wirelessCharge
+                mainRepository.setPower(currentlyCharging)
             }
         }
     }
 
-    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
-        when (keyCode) {
-            KeyEvent.KEYCODE_HEADSETHOOK -> {
-                LogManager.logOnMain(LogLevel.INFO, "fun onKeyUp() Кнопка гарнитуры отпущена", mainRepository.getErrorControl())
-                mainRepository.setMicKeyClick(0)
-                callAction()
-                return true
-            }
-
-            KeyEvent.KEYCODE_VOLUME_UP,
-            KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                LogManager.logOnMain(LogLevel.INFO, "fun onKeyUp() Кнопка ${if(keyCode == KeyEvent.KEYCODE_VOLUME_UP) "увеличения" else "уменьшения"} громкости отпущена", mainRepository.getErrorControl())
-                mainRepository.setMicKeyClick(0)
-                if (mainRepository.getModeSelection() == "Репитер (2 Канала)") {
-                    callAction(true)
-                }
-                return true
-            }
-            else -> return super.onKeyUp(keyCode, event)
-        }
-    }
-
-    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        super.onKeyUp(keyCode, event)
-        when (keyCode) {
-            KeyEvent.KEYCODE_HEADSETHOOK -> {
-                LogManager.logOnMain(LogLevel.INFO, "onKeyDown() Кнопка гарнитуры нажата", mainRepository.getErrorControl())
-                mainRepository.setMicKeyClick(KeyEvent.KEYCODE_HEADSETHOOK)
-                return true
-            }
-
-            KeyEvent.KEYCODE_VOLUME_UP -> {
-                LogManager.logOnMain(LogLevel.INFO, "onKeyDown() Кнопка увеличения громкости нажата", mainRepository.getErrorControl())
-                mainRepository.setMicKeyClick(KeyEvent.KEYCODE_VOLUME_UP)
-                return true
-            }
-
-            KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                LogManager.logOnMain(LogLevel.INFO, "onKeyDown() Кнопка уменьшения громкости нажата", mainRepository.getErrorControl())
-                mainRepository.setMicKeyClick(KeyEvent.KEYCODE_VOLUME_DOWN)
-                return true
-            }
-
-            else -> return super.onKeyDown(keyCode, event)
-        }
-    }
-
-    private fun callAction(hasProblem: Boolean = false) {
-        if (mainRepository.getCall() != null && mainRepository.getModeSelection() == "Репитер (2 Канала") {
-            when (mainRepository.getCallState()) {
-                Call.STATE_RINGING -> {
-                    LogManager.logOnMain(LogLevel.INFO, "callAction() Ответ на входящий звонок", mainRepository.getErrorControl())
-                    DtmfService.callAnswer(this)
-                }
-                Call.STATE_ACTIVE,
-                Call.STATE_DIALING,
-                Call.STATE_CONNECTING -> {
-                    LogManager.logOnMain(LogLevel.INFO, "callAction() Завершение звонка", mainRepository.getErrorControl())
-                    DtmfService.callEnd(this)
-                }
-            }
-        } else {
-            if (mainRepository.getModeSelection() == "Репитер (2 Канала)") {
-                val newState = !mainRepository.getStartDtmf()
-                mainRepository.setStartDtmf(newState, hasProblem)
+    private val headphoneReceiver: BroadcastReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent?) {
+            if (intent?.action == Intent.ACTION_HEADSET_PLUG) {
+                val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                audioManager.ringerMode = if (intent.getIntExtra("state", 0) == 1) {
+                mainRepository.speakText("Аудио кабель подключен", false)
+                AudioManager.RINGER_MODE_SILENT
+                } else {
+                mainRepository.speakText("Подключите аудио кабель", false)
+                AudioManager.RINGER_MODE_NORMAL }
             }
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        LogManager.logOnMain(LogLevel.INFO, "onCreate() Приложение запущено", mainRepository.getErrorControl())
         checkPermissions()
         offerReplacingDefaultDialer()
-
         setContent {
             VoyagerDialogTheme {
                 MaterialTheme {
@@ -160,24 +78,22 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        registerReceivers()
+        mainRepository.startDtmf()
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+
+    private fun registerReceivers() {
+        val filter = IntentFilter(Intent.ACTION_HEADSET_PLUG)
+        registerReceiver(headphoneReceiver, filter)
         val intentFilter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
         intentFilter.addAction(Intent.ACTION_POWER_CONNECTED)
         intentFilter.addAction(Intent.ACTION_POWER_DISCONNECTED)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(powerReceiver, intentFilter, RECEIVER_EXPORTED)
-        } else {
-            registerReceiver(powerReceiver, intentFilter)
-        }
-
-        if (mainRepository.getModeSelection() != "Репитер (2 Канала)" && mainRepository.getStartDtmf() == false) {
-            LogManager.logOnMain(LogLevel.INFO, "Автоматический запуск DTMF распознавания при начальном старте приложения", mainRepository.getErrorControl())
-            mainRepository.setStartDtmf(!mainRepository.getStartDtmf())
-        }
+        registerReceiver(powerReceiver, intentFilter)
     }
 
     private fun offerReplacingDefaultDialer() {
         if (getSystemService(TelecomManager::class.java).defaultDialerPackage != packageName) {
-            LogManager.logOnMain(LogLevel.ERROR, "Приложение не является приложением по умолчанию для звонков, ПОПЫТКА ЗАПУСКА ПРИВЕДЕТ К ПАДЕНИЮ", mainRepository.getErrorControl())
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val intent =
                     getSystemService(RoleManager::class.java).createRequestRoleIntent(RoleManager.ROLE_DIALER)
@@ -203,6 +119,30 @@ class MainActivity : ComponentActivity() {
 
         if (ContextCompat.checkSelfPermission(
                 this,
+                Manifest.permission.WRITE_CONTACTS
+            ) == PackageManager.PERMISSION_DENIED
+        ) {
+            permissionsToRequest.add(Manifest.permission.WRITE_CONTACTS)
+        }
+
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.READ_SMS
+            ) == PackageManager.PERMISSION_DENIED
+        ) {
+            permissionsToRequest.add(Manifest.permission.READ_SMS)
+        }
+
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.SEND_SMS
+            ) == PackageManager.PERMISSION_DENIED
+        ) {
+            permissionsToRequest.add(Manifest.permission.SEND_SMS)
+        }
+
+        if (ContextCompat.checkSelfPermission(
+                this,
                 Manifest.permission.MODIFY_AUDIO_SETTINGS
             ) == PackageManager.PERMISSION_DENIED
         ) {
@@ -221,52 +161,63 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(
                     this,
-                    POST_NOTIFICATIONS
+                    Manifest.permission.POST_NOTIFICATIONS
                 ) == PackageManager.PERMISSION_DENIED
             ) {
-                permissionsToRequest.add(POST_NOTIFICATIONS)
+                permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
         if (ContextCompat.checkSelfPermission(
                 this,
-                WRITE_EXTERNAL_STORAGE
+                Manifest.permission.CALL_PHONE
             ) == PackageManager.PERMISSION_DENIED
         ) {
-            permissionsToRequest.add(WRITE_EXTERNAL_STORAGE)
+            permissionsToRequest.add(Manifest.permission.CALL_PHONE)
         }
-        if (ContextCompat.checkSelfPermission(
-                this,
-                CALL_PHONE
-            ) == PackageManager.PERMISSION_DENIED
-        ) {
-            permissionsToRequest.add(CALL_PHONE)
-        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             if (ContextCompat.checkSelfPermission(
                     this,
-                    ANSWER_PHONE_CALLS
+                    Manifest.permission.ANSWER_PHONE_CALLS
                 ) == PackageManager.PERMISSION_DENIED
             ) {
-                permissionsToRequest.add(ANSWER_PHONE_CALLS)
+                permissionsToRequest.add(Manifest.permission.ANSWER_PHONE_CALLS)
             }
         }
+
         if (ContextCompat.checkSelfPermission(
                 this,
-                READ_PHONE_STATE
+                Manifest.permission.READ_PHONE_STATE
             ) == PackageManager.PERMISSION_DENIED
         ) {
-            permissionsToRequest.add(READ_PHONE_STATE)
+            permissionsToRequest.add(Manifest.permission.READ_PHONE_STATE)
         }
+
         if (ContextCompat.checkSelfPermission(
                 this,
-                RECORD_AUDIO
+                Manifest.permission.RECORD_AUDIO
             ) == PackageManager.PERMISSION_DENIED
         ) {
-            permissionsToRequest.add(RECORD_AUDIO)
+            permissionsToRequest.add(Manifest.permission.RECORD_AUDIO)
+        }
+
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+            ) == PackageManager.PERMISSION_DENIED
+        ) {
+            permissionsToRequest.add(Manifest.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+        }
+
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.READ_CALL_LOG
+            ) == PackageManager.PERMISSION_DENIED
+        ) {
+            permissionsToRequest.add(Manifest.permission.READ_CALL_LOG)
         }
 
         if (permissionsToRequest.isNotEmpty()) {
-            LogManager.logOnMain(LogLevel.ERROR, "Требуются разрешения: ${permissionsToRequest.joinToString(", ")} Не предоставление данных разрешений ПРИВЕДЕТ К ПАДЕНИЮ ПРИ ПОПЫТКЕ ЗАПУСКА", mainRepository.getErrorControl())
             ActivityCompat.requestPermissions(
                 this,
                 permissionsToRequest.toTypedArray(),
@@ -276,8 +227,10 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        LogManager.logOnMain(LogLevel.INFO, "onDestroy() Приложение остановлено", mainRepository.getErrorControl())
         super.onDestroy()
+        unregisterReceiver(headphoneReceiver)
         unregisterReceiver(powerReceiver)
+        mainRepository.stopDtmf()
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 }

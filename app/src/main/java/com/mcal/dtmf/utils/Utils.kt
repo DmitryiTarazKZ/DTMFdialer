@@ -1,32 +1,27 @@
 package com.mcal.dtmf.utils
 
 import android.Manifest
-import android.content.BroadcastReceiver
+import android.app.Activity
+import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.media.AudioManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.provider.CallLog
 import android.provider.ContactsContract
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
-import android.telephony.CellSignalStrength
-import android.telephony.PhoneStateListener
-import android.telephony.SignalStrength
-import android.telephony.TelephonyManager
+import android.telephony.SmsManager
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import com.mcal.dtmf.data.repositories.main.LogLevel
 import com.mcal.dtmf.data.repositories.main.MainRepository
-import com.mcal.dtmf.service.DtmfService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -34,39 +29,21 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import java.util.Timer
+import java.util.TimerTask
 import kotlin.math.roundToInt
 
 class Utils(
     private val mainRepository: MainRepository,
-    var flagVoise: Boolean,
     private val scope: CoroutineScope
 ) {
-
-
-
-
     private var lastMissedCallNumber: String? = null
     private var lastMissedCallTime: String? = null
+    private val REQUEST_CODE_CONTACTS_PERMISSION = 1
 
     companion object {
 
-        // Получение данных о том подключенны наушники или нет
-        fun headphoneReceiver(context: Context, callback: (Boolean) -> Unit) {
-            val headphoneReceiver = object : BroadcastReceiver() {
-                override fun onReceive(context: Context, intent: Intent) {
-                    if (intent.action == AudioManager.ACTION_HEADSET_PLUG) {
-                        val isConnected = intent.getIntExtra("state", 0) == 1
-
-                        callback(isConnected)
-                    }
-                }
-            }
-            context.registerReceiver(headphoneReceiver, IntentFilter(AudioManager.ACTION_HEADSET_PLUG))
-        }
-
-
-
-        // получение данных о температуре и заряде батареи
+        // Получение данных о температуре и заряде батареи
         fun getCurrentBatteryTemperature(context: Context): String {
             val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
             return try {
@@ -84,10 +61,43 @@ class Utils(
                 "Не удалось получить данные"
             }
         }
+
+        fun getCurrentBatteryVoltage(context: Context): String {
+            val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            return try {
+                (intent!!.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0)).toFloat().toString()
+            } catch (e: Exception) {
+                "Не удалось получить данные"
+            }
+        }
+
+        // Функция озвучивания состояния батареи
+        fun batteryStatus(context: Context): Triple<String, String, String> {
+            val batteryTemperature = getCurrentBatteryTemperature(context).toDouble().roundToInt()
+            val batteryLevel = getCurrentBatteryLevel(context).toDouble().roundToInt()
+            val batteryVoltage = getCurrentBatteryVoltage(context).toDouble() / 1000
+
+            val temperatureText = when (batteryTemperature) {
+                1, 21, 31, 41, 51, 61, 71, 81, 91 -> "$batteryTemperature градус"
+                in 2..4, in 22..24, in 32..34, in 42..44, in 52..54, in 62..64, in 72..74, in 82..84, in 92..94 -> "$batteryTemperature градуса"
+                else -> "$batteryTemperature градусов"
+            }
+
+            val levelText = when (batteryLevel) {
+                1, 21, 31, 41, 51, 61, 71, 81, 91 -> "$batteryLevel процент"
+                in 2..4, in 22..24, in 32..34, in 42..44, in 52..54, in 62..64, in 72..74, in 82..84, in 92..94 -> "$batteryLevel процента"
+                else -> "$batteryLevel процентов"
+            }
+
+            val voltageWhole = batteryVoltage.toInt()
+            val voltageFraction = ((batteryVoltage - voltageWhole) * 100).roundToInt()
+            val voltageText = "$voltageWhole целых $voltageFraction сотых вольта"
+
+            return Triple(temperatureText, levelText, voltageText)
+        }
     }
 
     // Дата и время по команде 2*
-
     fun speakCurrentTime() {
         // Получаем текущее время
         val currentTime = System.currentTimeMillis()
@@ -131,7 +141,7 @@ class Utils(
             else -> "$hours часов"
         }
 
-// Форматируем строку для минут
+        // Форматируем строку для минут
         val minutesString = when (minutes) {
             1 -> "одна минута"
             2 -> "две минуты"
@@ -230,44 +240,17 @@ class Utils(
             31 -> "тридцать первое"
             else -> "$dayOfMonth"
         }
-
-        mainRepository.speakText("Текущее время $hoursString $minutesString. Сегодня $dayOfWeek, $dayOfMonthString $month.")
+        mainRepository.speakText("Текущее время $hoursString $minutesString. Сегодня $dayOfWeek, $dayOfMonthString $month",false)
     }
 
-    // Получения текущего уровня сигнала сотовой сети (от 0 до 4 где 0 отсутствие сигнала)
-    fun getCurentCellLevel(context: Context) {
-        val handler = Handler(Looper.getMainLooper())
-        handler.post {
-            val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
-            telephonyManager.listen(object : PhoneStateListener() {
-                @Deprecated("Этот метод устарел")
-                override fun onSignalStrengthsChanged(signalStrengths: SignalStrength) {
-                    val signalStrength = signalStrengths.level
-                    val simOperatorName = telephonyManager.simOperatorName
-                    LogManager.logOnMain(LogLevel.INFO, "Уровень сети оператора $simOperatorName, по индикатору антены $signalStrength", mainRepository.getErrorControl())
-                    val speechResource = when (signalStrength) {
-                        0 -> "Полностью отсутствует. Вызов с этой сим карты невозможен"
-                        1 -> "Низкий"
-                        2 -> "Умеренный"
-                        3 -> "Хороший"
-                        4 -> "Отличный"
-                        5 -> "Отличный" // Добавлено для обработки значения 5 на некоторых смартфонах
-                        else -> "Полностью отсутствует. Вызов с этой сим карты невозможен"
-                    }
-                    mainRepository.speakText("Уровень сети оператора $simOperatorName, по индикатору антэны $speechResource")
-                }
-            }, PhoneStateListener.LISTEN_SIGNAL_STRENGTHS)
-        }
-    }
-
-    // Последний пропущенный вызов
+    // Последний пропущенный вызов по команде 0*
     fun lastMissed(context: Context) {
         if (ContextCompat.checkSelfPermission(
                 context,
                 Manifest.permission.READ_CALL_LOG
             ) != PackageManager.PERMISSION_GRANTED
         ) {
-            mainRepository.speakText("Разрешение на чтение лога вызовов не получено")
+            mainRepository.speakText("Не получено разрешение на доступ к информации о последнем пропущенном вызове",false)
             mainRepository.setInput("")
             return
         }
@@ -296,32 +279,13 @@ class Utils(
                         "Последний пропущенный вызов был от абонента $lastMissedCallNumber... он звонил в $lastMissedCallTime... " +
                                 "Если Вы хотите перезвонить, нажмите звездочку. Для отмены нажмите решетку. Также Вы можете " +
                                 "закрепить этот номер за одной из клавиш быстрого набора"
-                    )
+                        ,false)
                     mainRepository.setInput("")
                     mainRepository.setInput(number.replace("+7", "8"))
                 } else {
-                    mainRepository.speakText("Не найдено пропущенных вызовов.")
+                    mainRepository.speakText("Не найдено пропущенных вызовов.",false)
                 }
             }
-    }
-
-    // Функция проверки состояния батареи
-    fun batteryStatus(context: Context) {
-        val batteryTemperature = getCurrentBatteryTemperature(context).toDouble().roundToInt()
-        val batteryLevel = getCurrentBatteryLevel(context).toDouble().roundToInt()
-
-        val temperatureText = when (batteryTemperature) {
-            1, 21, 31, 41, 51, 61, 71, 81, 91 -> "$batteryTemperature градус"
-            in 2..4, in 22..24, in 32..34, in 42..44, in 52..54, in 62..64, in 72..74, in 82..84, in 92..94 -> "$batteryTemperature градуса"
-            else -> "$batteryTemperature градусов"
-        }
-
-        val levelText = when (batteryLevel) {
-            1, 21, 31, 41, 51, 61, 71, 81, 91 -> "$batteryLevel процент"
-            in 2..4, in 22..24, in 32..34, in 42..44, in 52..54, in 62..64, in 72..74, in 82..84, in 92..94 -> "$batteryLevel процента"
-            else -> "$batteryLevel процентов"
-        }
-        mainRepository.speakText("Температура аккумулятора $temperatureText. Заряд аккумулятора $levelText")
     }
 
     // Функция проверки доступен ли интернет
@@ -333,50 +297,51 @@ class Utils(
                 connectivityManager.getNetworkCapabilities(connectivityManager.activeNetwork)
             if (capabilities != null) {
                 if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
-                    LogManager.logOnMain(LogLevel.INFO, "isOnline() Получение интернета через мобильные данные", mainRepository.getErrorControl())
                     return true
                 } else if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
-                    LogManager.logOnMain(LogLevel.INFO, "isOnline() Получение интернета через Wi-Fi", mainRepository.getErrorControl())
                     return true
                 } else if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
-                    LogManager.logOnMain(LogLevel.INFO, "isOnline() Подключение через Ethernet", mainRepository.getErrorControl())
                     return true
                 }
             }
         }
-        LogManager.logOnMain(LogLevel.INFO, "isOnline() Нет подключения к интернету", mainRepository.getErrorControl())
         return false
     }
 
     // Функция голосового распознавания
+    fun startSpeechRecognition(context: Context, onResult: (String?) -> Unit) {
 
-    fun startSpeechRecognition(context: Context) {
-
-
-        LogManager.logOnMain(LogLevel.INFO, "fun startSpeechRecognition() Начало распознавания речи", mainRepository.getErrorControl())
-
-        val speechRecognizer =
-            SpeechRecognizer.createSpeechRecognizer(context) // context передается из Вашей Activity или Fragment
+        val speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context)
 
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(
-                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-            )
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ru-RU") // Устанавливаем язык на русский
-            putExtra(
-                RecognizerIntent.EXTRA_PARTIAL_RESULTS,
-                true
-            ) // Настраиваем на частичные результаты
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true) // Настраиваем на частичные результаты
         }
+
+        var silenceDuration = 0 // Переменная для отслеживания времени молчания
+        val maxSilenceDuration = 10000 // Максимальная продолжительность молчания в миллисекундах
+        val timer = Timer()
 
         speechRecognizer.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) {
-                LogManager.logOnMain(LogLevel.INFO, "onReadyForSpeech() Подготовка к распознаванию речи", mainRepository.getErrorControl())
+                silenceDuration = 0 // Сбрасываем таймер молчания
+                timer.scheduleAtFixedRate(object : TimerTask() {
+                    override fun run() {
+                        silenceDuration += 1000
+                        if (silenceDuration >= maxSilenceDuration) {
+                            speechRecognizer.cancel()
+                            onResult(null)
+                            timer.cancel()
+                            mainRepository.speakText("Вы ничего не произнесли.", false)
+                        }
+                    }
+                }, 0, 1000) // Запускаем таймер с интервалом 1 секунда
             }
 
             override fun onBeginningOfSpeech() {
-                LogManager.logOnMain(LogLevel.INFO, "onBeginningOfSpeech() Начало речи", mainRepository.getErrorControl())
+                silenceDuration = 0
+                timer.cancel()
             }
 
             override fun onRmsChanged(rmsdB: Float) {
@@ -388,96 +353,56 @@ class Utils(
             }
 
             override fun onEndOfSpeech() {
-                LogManager.logOnMain(LogLevel.INFO, "onEndOfSpeech() Конец речи", mainRepository.getErrorControl())
             }
 
             override fun onError(error: Int) {
-                if (!mainRepository.getStartDtmf()) {
-                    mainRepository.setStartDtmf(true)
-                }
-                when (error) {
-                    SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> mainRepository.speakText("Время сетевой операции истекло")
-                    SpeechRecognizer.ERROR_NETWORK -> mainRepository.speakText("Произошла ошибка сети")
-                    SpeechRecognizer.ERROR_AUDIO -> mainRepository.speakText("Ошибка записи звука")
-                    SpeechRecognizer.ERROR_SERVER -> mainRepository.speakText("Сервер отправил ошибку")
-                    SpeechRecognizer.ERROR_CLIENT -> mainRepository.speakText("Ошибка на стороне клиента")
-                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> mainRepository.speakText("Нет входной речи")
-                    SpeechRecognizer.ERROR_NO_MATCH -> mainRepository.speakText("Распознавание не дало совпадений")
-                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> mainRepository.speakText("Распознаватель занят")
-                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> mainRepository.speakText("Недостаточно разрешений")
-                    SpeechRecognizer.ERROR_TOO_MANY_REQUESTS -> mainRepository.speakText("Слишком много запросов от одного клиента")
-                    SpeechRecognizer.ERROR_SERVER_DISCONNECTED -> mainRepository.speakText("Сервер был отключен")
-                    SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED -> mainRepository.speakText("Запрашиваемый язык не поддерживается")
-                    SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE -> mainRepository.speakText("Запрашиваемый язык недоступен")
-                    SpeechRecognizer.ERROR_CANNOT_CHECK_SUPPORT -> mainRepository.speakText("Невозможно проверить поддержку")
-                    SpeechRecognizer.ERROR_CANNOT_LISTEN_TO_DOWNLOAD_EVENTS -> mainRepository.speakText("Служба не поддерживает прослушивание событий загрузки")
-                    else -> mainRepository.speakText("Произошла неизвестная ошибка")
-                }
+                onResult(null)
+                timer.cancel() // Останавливаем таймер при ошибке
             }
 
             override fun onResults(results: Bundle?) {
-                if (!mainRepository.getStartDtmf()) mainRepository.setStartDtmf(true)
-
                 val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                LogManager.logOnMain(
-                    LogLevel.INFO,
-                    "onResults: Получены результаты распознавания речи",
-                    mainRepository.getErrorControl()
-                )
 
                 if (matches.isNullOrEmpty()) {
-                    LogManager.logOnMain(
-                        LogLevel.WARNING,
-                        "onResults: Нет распознанных результатов",
-                        mainRepository.getErrorControl()
-                    )
-                    return // Выход из функции, если нет распознанных результатов
+                    onResult(null)
+                    return
                 }
 
                 val recognizedText = matches[0]
-                LogManager.logOnMain(
-                    LogLevel.INFO,
-                    "onResults: Распознанный текст - $recognizedText",
-                    mainRepository.getErrorControl()
-                )
-
-                // Проверяем, является ли распознанный текст именем контакта
-                val contactNumber = getContactNumberByName(recognizedText, context)
-                if (contactNumber != null) {
-                    scope.launch {
-                        // Получаем имя контакта для озвучивания
-                        val contactName = getContactNameByNumber(contactNumber, context)
-                        LogManager.logOnMain(
-                            LogLevel.INFO,
-                            "onResults: Найден номер для контакта - $contactNumber, имя - $contactName",
-                            mainRepository.getErrorControl()
-                        )
-                        mainRepository.setFlashlight(true)
-                        mainRepository.speakText("Найден контакт $contactName") // Используем имя, как оно записано в телефонной книге
-                        mainRepository.setInput(contactNumber) // Устанавливаем номер для вызова
-                        delay(7000)
-                        DtmfService.callStart(context) // Начинаем вызов
-                    }
-                } else {
-                    LogManager.logOnMain(
-                        LogLevel.WARNING,
-                        "onResults: Абонент с именем $recognizedText не найден.",
-                        mainRepository.getErrorControl()
-                    )
-                    mainRepository.speakText("В вашей телефонной книге нет абонента с именем $recognizedText")
-                }
+                onResult(recognizedText)
+                timer.cancel()
             }
 
             override fun onPartialResults(partialResults: Bundle?) {
-                // Обработка частичных результатов (можно игнорировать)
             }
 
             override fun onEvent(eventType: Int, params: Bundle?) {
-                // Обработка событий
             }
         })
 
         speechRecognizer.startListening(intent)
+    }
+
+    fun getNameContact(result: String, context: Context) {
+
+        // Проверяем, является ли распознанный текст именем контакта
+        val contactNumber = getContactNumberByName(result, context)
+        if (contactNumber != null) {
+            scope.launch {
+                val contactName = getContactNameByNumber(contactNumber, context)
+                mainRepository.speakText("Найден контакт $contactName. Нажмите звездочку для вызова или решетку для отмены",false) // Используем имя, как оно записано в телефонной книге
+                mainRepository.setInput(contactNumber) // Устанавливаем номер для вызова
+                delay(7000)
+            }
+        } else {
+            scope.launch {
+                mainRepository.setInput("")
+                mainRepository.speakText(
+                    "В телефонной книге нет абонента с именем $result. Вы можете добавить этого абонента в вашу телефонную книгу",
+                    false
+                )
+            }
+        }
     }
 
     /// Блок распознавания речевой команды и поиска имени в книге контактов с последующим вызовом
@@ -505,8 +430,6 @@ class Utils(
                 // Приводим номер к нужному формату
                 contactNumber = formatPhoneNumber(contactNumber)
             } else {
-                // Если контакт не найден, пробуем найти с учетом нечеткого совпадения
-                LogManager.logOnMain(LogLevel.INFO, "getContactNumberByName() Контакт не найден, пробуем нечеткое совпадение", mainRepository.getErrorControl())
                 val fuzzyContactName = findContactWithFuzzyMatching(lowerCaseName, context)
                 if (fuzzyContactName != null) {
                     // Выполняем повторный запрос для получения номера по найденному имени
@@ -522,15 +445,14 @@ class Utils(
                         if (fuzzy.moveToFirst()) {
                             contactNumber = fuzzy.getString(fuzzy.getColumnIndexOrThrow(
                                 ContactsContract.CommonDataKinds.Phone.NUMBER))
-                            LogManager.logOnMain(LogLevel.INFO, "getContactNumberByName() Найден номер телефона по нечеткому совпадению: $contactNumber", mainRepository.getErrorControl())
-                            // Приводим номер к нужному формату
+
                             contactNumber = formatPhoneNumber(contactNumber)
                         } else {
-                            LogManager.logOnMain(LogLevel.INFO, "getContactNumberByName() Контакт не найден по нечеткому совпадению", mainRepository.getErrorControl())
+
                         }
                     }
                 } else {
-                    LogManager.logOnMain(LogLevel.INFO, "getContactNumberByName() Не удалось найти контакт с нечетким совпадением", mainRepository.getErrorControl())
+
                 }
             }
         }
@@ -626,5 +548,218 @@ class Utils(
         }
 
         return contactName
+    }
+
+    fun saveContact(phoneNumber: String, contactName: String, context: Context): Boolean {
+        // Приводим имя к формату с заглавной буквы
+        val formattedName = contactName.split(" ").joinToString(" ") {
+            it.replaceFirstChar { char -> char.uppercase() } // Приводим первую букву каждого слова к заглавной
+        }
+
+        // Создаем новый объект для контакта
+        val values = ContentValues().apply {
+            put(ContactsContract.RawContacts.ACCOUNT_TYPE, "")
+            put(ContactsContract.RawContacts.ACCOUNT_NAME, "")
+        }
+
+        // Вставляем новый контакт
+        val rawContactUri = context.contentResolver.insert(ContactsContract.RawContacts.CONTENT_URI, values)
+        // Проверяем, был ли успешно добавлен контакт
+        if (rawContactUri == null) {
+            return false // Не удалось создать контакт
+        }
+
+        val rawContactId = ContentUris.parseId(rawContactUri)
+
+        // Сохраняем имя контакта
+        val nameValues = ContentValues().apply {
+            put(ContactsContract.Data.RAW_CONTACT_ID, rawContactId)
+            put(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE)
+            put(ContactsContract.CommonDataKinds.StructuredName.DISPLAY_NAME, formattedName)
+        }
+        val nameUri = context.contentResolver.insert(ContactsContract.Data.CONTENT_URI, nameValues)
+
+        if (nameUri == null) {
+            return false // Не удалось сохранить имя контакта
+        }
+
+        // Сохраняем номер телефона
+        val phoneValues = ContentValues().apply {
+            put(ContactsContract.Data.RAW_CONTACT_ID, rawContactId)
+            put(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE)
+            put(ContactsContract.CommonDataKinds.Phone.NUMBER, phoneNumber)
+            put(ContactsContract.CommonDataKinds.Phone.TYPE, ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE)
+        }
+        val phoneUri = context.contentResolver.insert(ContactsContract.Data.CONTENT_URI, phoneValues)
+        if (phoneUri == null) {
+            return false
+        }
+        return true
+    }
+
+    // Функция для удаления контакта из телефонной книги по имени
+    fun deleteContactByName(result: String, context: Context): Boolean {
+        // Проверяем разрешение на доступ к контактам
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+
+            // Запрашиваем разрешение
+            ActivityCompat.requestPermissions(context as Activity,
+                arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS),
+                REQUEST_CODE_CONTACTS_PERMISSION)
+            return false
+        }
+
+        // Определяем URI для поиска контакта по имени
+        val uri = ContactsContract.CommonDataKinds.Phone.CONTENT_URI
+        val projection = arrayOf(ContactsContract.CommonDataKinds.Phone.CONTACT_ID, ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
+        val selection = "LOWER(${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME}) = LOWER(?)"
+        val selectionArgs = arrayOf(result.lowercase()) // Используем LOWER для поиска
+
+        // Выполняем запрос для получения ID контакта
+        context.contentResolver.query(uri, projection, selection, selectionArgs, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val contactId = cursor.getLong(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.CONTACT_ID))
+
+                // Теперь выполняем запрос к RawContacts, чтобы получить все записи
+                val rawProjection = arrayOf(ContactsContract.RawContacts._ID)
+                val rawSelection = "${ContactsContract.RawContacts.CONTACT_ID} = ?"
+                val rawSelectionArgs = arrayOf(contactId.toString())
+
+                context.contentResolver.query(ContactsContract.RawContacts.CONTENT_URI, rawProjection, rawSelection, rawSelectionArgs, null)?.use { rawCursor ->
+                    if (rawCursor.moveToFirst()) {
+                        do {
+                            val rawContactId = rawCursor.getLong(rawCursor.getColumnIndexOrThrow(ContactsContract.RawContacts._ID))
+                            val deleteUri = ContentUris.withAppendedId(ContactsContract.RawContacts.CONTENT_URI, rawContactId)
+
+                            // Удаляем контакт по его RawContact ID
+                            val rowsDeleted = context.contentResolver.delete(deleteUri, null, null)
+                            if (rowsDeleted > 0) {
+                                return true // Возвращаем true, если контакт был успешно удален
+                            }
+                        } while (rawCursor.moveToNext())
+                    }
+                }
+            }
+        }
+
+        return false // Возвращаем false, если контакт не найден или не удален
+    }
+
+    // Функция для получения последнего входящего СМС по команде 4*
+    fun getLastIncomingSms(context: Context): String? {
+        val smsUri = Uri.parse("content://sms/inbox")
+        val cursor = context.contentResolver.query(smsUri, null, null, null, "date DESC")
+        cursor?.use {
+            if (it.moveToFirst()) {
+                val messageBody = it.getString(it.getColumnIndexOrThrow("body"))
+                return convertToRussianText(messageBody)
+            }
+        }
+        return "сообщения отсутствуют"
+    }
+
+    // Функция для отправки надиктованного сообщения СМС по команде 4 после набора номера
+    fun sendSms(context: Context, phoneNumber: String, message: String): Boolean {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
+            return false
+        }
+        return try {
+            val smsManager = SmsManager.getDefault()
+            smsManager.sendTextMessage(phoneNumber, null, message, null, null)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    // Функция для преобразования номера телефона в более понятное озвучивание
+    fun numberToText(number: String): String {
+        if (number.isEmpty()) return "не назначен"
+
+        // Убираем все пробелы, чтобы работать только с цифрами
+        val cleanedNumber = number.replace(" ", "")
+
+        // Проверяем длину номера
+        return when (cleanedNumber.length) {
+            11 -> {
+                // Разбиваем на 5 частей
+                val part1 = cleanedNumber.substring(0, 1)  // 1 часть
+                val part2 = cleanedNumber.substring(1, 4)  // 2 часть
+                val part3 = cleanedNumber.substring(4, 7)  // 3 часть
+                val part4 = cleanedNumber.substring(7, 9)  // 4 часть
+                val part5 = cleanedNumber.substring(9, 11) // 5 часть
+
+                // Формируем текстовое представление
+                "$part1. $part2. $part3. $part4. $part5."
+            }
+            else -> {
+                // Произносим по цифрам
+                val digits = cleanedNumber.map { it.toString() }
+                return digits.joinToString(" ") { digit ->
+                    when (digit) {
+                        "0" -> "ноль."
+                        "1" -> "один."
+                        "2" -> "два."
+                        "3" -> "три."
+                        "4" -> "четыре."
+                        "5" -> "пять."
+                        "6" -> "шесть."
+                        "7" -> "семь."
+                        "8" -> "восемь."
+                        "9" -> "девять."
+                        else -> ""
+                    }
+                }
+            }
+        }
+    }
+
+    // Функция для преобразования текста СМС в нормальный русский текст если написано английскими буквами
+    private fun convertToRussianText(input: String): String {
+        // Удаляем ссылки из текста
+        val cleanedInput = input.replace(Regex("https?://\\S+"), "")
+
+        // Заменяем сокращения
+        val updatedInput = cleanedInput
+            .replace("obl.", "области")
+            .replace("Zh", "ж")
+            .replace("zh", "ж")
+            .replace("m/s", "метров в секунду")
+            .replace("ya", "я")
+            .replace("ГБ", "гигабайт")
+            .replace("SMS", "текстовых сообщений")
+            .replace("Beeline", "билайн")
+            .replace("Tele2", "теле два")
+            .replace("Altel", "алтел")
+            .replace("РК.", "республике казахстан.")
+            .replace("др.", "другие")
+            .replace("моб.", "мобильные")
+            .replace("Kazakhtelecom", "казахтелеком")
+            .replace("telecom.kz", "телеком точка кей зет.")
+            .replace("мин", "минут")
+            .replace("*", "звездочка")
+            .replace("#", "решетка")
+            .replace("шт", "штук")
+            .replace("Мб", "мегабайт")
+            .replace("#", "решетка")
+            .replace("%", "процентов")
+            .replace("тг.", "тенге")
+            .replace("Tг.", "тенге")
+
+        val transliterationMap = mapOf(
+            'a' to 'а', 'b' to 'б', 'c' to 'ц', 'd' to 'д', 'e' to 'е', 'f' to 'ф', 'g' to 'г', 'h' to 'х', 'i' to 'и',
+            'j' to 'й', 'k' to 'к', 'l' to 'л', 'm' to 'м', 'n' to 'н', 'o' to 'о', 'p' to 'п', 'q' to 'щ', 'r' to 'р',
+            's' to 'с', 't' to 'т', 'u' to 'у', 'v' to 'в', 'w' to 'в', 'x' to 'ь', 'y' to 'ы', 'z' to 'з'
+        )
+        val words = updatedInput.split(" ")
+        val convertedWords = words.map { word ->
+            word.map { char ->
+                val lowerChar = char.toLowerCase() // Преобразуем символ в нижний регистр
+                val transliteratedChar = transliterationMap[lowerChar] ?: lowerChar
+                transliteratedChar
+            }.joinToString("")
+        }
+        return convertedWords.joinToString(" ")
     }
 }
