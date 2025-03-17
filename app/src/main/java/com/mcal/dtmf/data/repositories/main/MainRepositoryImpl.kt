@@ -31,6 +31,7 @@ import com.mcal.dtmf.utils.Utils
 import com.mcal.dtmf.utils.Utils.Companion.batteryStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -100,15 +101,14 @@ class MainRepositoryImpl(
     private var isPlaying = false
     private val SAMPLE_RATE = 44100
     private val AMPLITUDE = 0.1
+    private var playSineWaveJob: Job? = null
 
     init {
-
-         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
 
         if (notificationManager.isNotificationPolicyAccessGranted()) {
-
             if (notificationManager.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL) {
                 try {
                     notificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL)
@@ -233,7 +233,7 @@ class MainRepositoryImpl(
     }
 
     // УПРАВЛЕНИЕ СУБТОНАМИ ДЛЯ СЕЛЕКТИВНОГО ВЫЗОВА
-    private suspend fun playSineWave(frequency: Double) {
+    private fun playSineWave(frequency: Double) {
         Log.d("Контрольный лог", "ЗАДАН СУБТОН ЧАСТОТОЙ: $frequency")
         if (audioTrack == null) {
             audioTrack = AudioTrack(
@@ -248,12 +248,11 @@ class MainRepositoryImpl(
             )
         }
 
-        withContext(Dispatchers.Default) {
+        playSineWaveJob = CoroutineScope(Dispatchers.IO).launch {
             if (!isPlaying) {
                 audioTrack?.play()
                 isPlaying = true
 
-                // Размер буфера для генерации звука
                 val bufferSize = SAMPLE_RATE / 10 // 100 мс
                 val buffer = ByteArray(bufferSize * 2)
                 val angleIncrement = 2.0 * Math.PI * frequency / SAMPLE_RATE
@@ -265,7 +264,6 @@ class MainRepositoryImpl(
                         buffer[2 * i] = (value and 0xFF).toByte()
                         buffer[2 * i + 1] = (value shr 8 and 0xFF).toByte()
                         angle += angleIncrement
-                        // Убедитесь, что угол не выходит за пределы 0-2π
                         if (angle >= 2 * Math.PI) angle -= 2 * Math.PI
                     }
                     audioTrack?.write(buffer, 0, buffer.size)
@@ -280,6 +278,42 @@ class MainRepositoryImpl(
             audioTrack?.stop()
             audioTrack?.release()
             audioTrack = null // Освобождаем AudioTrack
+            playSineWaveJob?.cancel()
+        }
+    }
+
+    private fun playSineWave1(frequency: Double, duration: Int) {
+        val sampleRate = 44100 // Частота дискретизации
+        val numSamples = duration * sampleRate / 1000 // Количество выборок
+        val generatedSnd = ShortArray(numSamples)
+
+        // Генерация синусоидального сигнала
+        for (i in 0 until numSamples) {
+            generatedSnd[i] = (Short.MAX_VALUE * Math.sin(2 * Math.PI * i / (sampleRate / frequency))).toInt().toShort()
+        }
+
+        // Создание AudioTrack для воспроизведения звука
+        val audioTrack = AudioTrack(
+            AudioManager.STREAM_MUSIC,
+            sampleRate,
+            AudioFormat.CHANNEL_OUT_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+            generatedSnd.size * 2,
+            AudioTrack.MODE_STATIC
+        )
+
+        // Заполнение AudioTrack сгенерированным звуком
+        audioTrack.write(generatedSnd, 0, generatedSnd.size)
+        audioTrack.play()
+
+        // Запуск в корутине, чтобы избежать блокировки основного потока
+        playSoundJob.launch {
+            withContext(Dispatchers.IO) {
+                // Длительность воспроизведения
+                Thread.sleep(duration.toLong())
+                audioTrack.stop()
+                audioTrack.release()
+            }
         }
     }
 
@@ -700,22 +734,19 @@ class MainRepositoryImpl(
                     setInput("")
                 }
 
-                else if (input == "55" && getCall() == null) {
+                else if (input == "54" && getCall() == null) {
+                    playSineWave1(100.0, 10000)
                     setInput("")
-                    playSoundJob.launch {
-                       // playSineWave(165.5)
-                        playSineWave(500.0)
-                         speakText("ПЕРВАЯ РАЦИЯ", false)
-                    }
+                }
+
+                else if (input == "55" && getCall() == null) {
+                    playSineWave(150.0)
+                    setInput("")
                 }
 
                 else if (input == "56" && getCall() == null) {
+                    playSineWave(200.0)
                     setInput("")
-                    playSoundJob.launch {
-                      //  playSineWave(123.0)
-                        playSineWave(1000.0)
-                        speakText("ВТОРАЯ РАЦИЯ", false)
-                    }
                 }
 
                 else if (input == "57" && getCall() == null) {
@@ -937,6 +968,8 @@ class MainRepositoryImpl(
 
             // Остановка вызова если он есть а если нету то очистка поля ввода
             else if (key == '#') {
+                stopPlayback()
+
                 textToSpeech.stop()
                 isSpeaking = false
                 when {
@@ -1011,7 +1044,7 @@ class MainRepositoryImpl(
                             setInput("")
                         } else {
                             if (!isSpeaking) {
-                                speakText("Номеронабиратель, очищен", false)
+                              //  speakText("Номеронабиратель, очищен", false)
                             }
                         }
 
