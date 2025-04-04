@@ -410,11 +410,8 @@ class Utils(
         val cr = context.contentResolver
         val projection = arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER)
         var contactNumber: String? = null
-
-        // Приводим имя к нижнему регистру и удаляем лишние пробелы
         val lowerCaseName = normalizeString(name)
 
-        // Выполняем запрос к контактам с использованием LIKE
         val cursor = cr.query(
             ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
             projection,
@@ -445,18 +442,12 @@ class Utils(
                         if (fuzzy.moveToFirst()) {
                             contactNumber = fuzzy.getString(fuzzy.getColumnIndexOrThrow(
                                 ContactsContract.CommonDataKinds.Phone.NUMBER))
-
                             contactNumber = formatPhoneNumber(contactNumber)
-                        } else {
-
                         }
                     }
-                } else {
-
                 }
             }
         }
-
         return contactNumber // Возвращаем номер телефона
     }
 

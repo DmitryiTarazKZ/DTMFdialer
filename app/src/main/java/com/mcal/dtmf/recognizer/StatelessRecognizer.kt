@@ -1,5 +1,6 @@
 package com.mcal.dtmf.recognizer
 
+import android.util.Log
 import com.mcal.dtmf.data.repositories.main.MainRepository
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
@@ -30,9 +31,26 @@ class StatelessRecognizer(private val spectrum: Spectrum) : KoinComponent {
         val highMax = getMax(75, 150)
         val outputFrequency = getMax(0, 500) * 15.625f
 
-        // Проверка на частоту 1750 Гц
-        if (outputFrequency == 1750f) {
-            return 'E'
+        //Log.d("Контрольный лог", "ЧАСТОТА РАВНА: $outputFrequency")
+
+        // Проверка на частоту 1000 Гц для определения первой радиостанций
+        if (outputFrequency == 1000.0f) {
+            return 'R'
+        }
+
+        // Проверка на частоту 1450 Гц для определения второй радиостанций
+        if (outputFrequency == 1453.125f) {
+            return 'S'
+        }
+
+        // Проверка на частоту 1750 Гц для определения третьей радиостанций
+        if (outputFrequency == 1750.0f) {
+            return 'T'
+        }
+
+        // Проверка на частоту 2100 Гц для определения четвертой радиостанций
+        if (outputFrequency == 2093.75f) {
+            return 'V'
         }
 
         val allMax = getMax(0, 150)
