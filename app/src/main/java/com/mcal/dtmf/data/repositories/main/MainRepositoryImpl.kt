@@ -260,7 +260,7 @@ class MainRepositoryImpl(
     private fun playSineWave(frequency: Double) {
 
         val SAMPLE_RATE = 44100 // Частота дискретизации
-        val cutoffFrequency = 200.0 // Частота среза фильтра Баттерворта
+        val cutoffFrequency = 260.0 // Частота среза фильтра Баттерворта
         val order = 2 // Порядок фильтра
 
         if (audioTrack == null) {
@@ -506,6 +506,7 @@ class MainRepositoryImpl(
                         val dataBlock = DataBlock(buffer, blockSize, bufferReadSize)
                         blockingQueue.put(dataBlock)
                         val amplitude = calculateAmplitude(buffer, bufferReadSize)
+                        //Log.d("Контрольный лог", "АМПРИТУДА: $amplitude")
                         val currentAmplitudeCheck = amplitude > 0
                         if (currentAmplitudeCheck != previousAmplitudeCheck) {
                             setAmplitudeCheck(currentAmplitudeCheck)
@@ -1010,145 +1011,225 @@ class MainRepositoryImpl(
                 }
 
                 // Настройка VOX Контрольное предложение не менять под него нарисована Диаграмма настройки
-                else if (input == "11" && (getCall() == null && block)) {
-                    textToSpeech.setOnUtteranceProgressListener(null)
-                    setInput("")
-                    speakText("Один. Два. Три. Четыре. Пять. Поверка работоспособности вокс системы. Шесть. Семь. Восемь. Девять. Десять", false)
+                else if (input == "11") {
+                    if (getCall() == null && block) {
+                        textToSpeech.setOnUtteranceProgressListener(null)
+                        setInput("")
+                        speakText(
+                            "Один. Два. Три. Четыре. Пять. Поверка работоспособности вокс системы. Шесть. Семь. Восемь. Девять. Десять",
+                            false
+                        )
+                    } else  {
+                        speakText("Команда заблокирована", false)
+                        setInput("")
+                    }
                 }
 
                 // Настройка VOX Нижний порог
-                else if (input == "22" && (getCall() == null && block)) {
-                    playSoundJob.launch {
-                        speakText("Установите время удержания в мили секундах на которое требуется настроить вокс", false)
-                        setInput("")
-                        delay(15000)
-                        periodVox = getInput()?.toLongOrNull() ?: 2500
-                        if (periodVox < 4000) {
-                            speakText("Период следования настроен на $periodVox длительность на $durationVox", false)
-                        } else speakText("Ожидается значение от 0 до 4000 милисекунд", false)
+                else if (input == "22") {
+                    if (getCall() == null && block) {
+                        playSoundJob.launch {
+                            speakText(
+                                "Установите время удержания в мили секундах на которое требуется настроить вокс",
+                                false
+                            )
+                            setInput("")
+                            delay(15000)
+                            periodVox = getInput()?.toLongOrNull() ?: 2500
+                            if (periodVox < 4000) {
+                                speakText(
+                                    "Период следования настроен на $periodVox длительность на $durationVox",
+                                    false
+                                )
+                            } else speakText("Ожидается значение от 0 до 4000 милисекунд", false)
 
-                        delay(10000)
-                        playDtmfTones(periodVox - 100, durationVox)
+                            delay(10000)
+                            playDtmfTones(periodVox - 100, durationVox)
+                            setInput("")
+                        }
+                    } else  {
+                        speakText("Команда заблокирована", false)
                         setInput("")
                     }
                 }
 
                 // Настройка VOX Верхний порог
-                else if (input == "33" && (getCall() == null && block)) {
-                    playDtmfTones(periodVox + 100, durationVox)
-                    setInput("")
+                else if (input == "33") {
+                    if (getCall() == null && block) {
+                        playDtmfTones(periodVox + 100, durationVox)
+                        setInput("")
+                    } else  {
+                        speakText("Команда заблокирована", false)
+                        setInput("")
+                    }
                 }
 
                 // Настройка VOX измерение времени срабатывания и времени до момента открытия шумоподавителя
-                else if ((input == "44" || flagVox) && (getCall() == null && block)) {
-                    playSoundJob.launch {
-                        if (!flagVox) { speakText("Введите длительность тона в милисекундах", false) }
-                        setInput("")
-                        flagVox = true
-                        delay(13000)
-                        durationVox = getInput()?.toLongOrNull() ?: 50
-                        if (durationVox > 1000)  {
-                            speakText("Ожидается значение от 0 до 1000 милисекунд", false)
+                else if (input == "44" || flagVox) {
+                    if (getCall() == null && block) {
+                        playSoundJob.launch {
+                            if (!flagVox) {
+                                speakText("Введите длительность тона в милисекундах", false)
+                            }
                             setInput("")
-                            flagVox = false
-                        } else  {
-                            delay(5000)
-                            playDtmfTone(0, 1000, durationVox)
-                            delay(4000)
-                            setInput("")
-                            flagVox = false
-                            speakText("Был проигран тон с длительностью $durationVox милисекунд", false)
+                            flagVox = true
+                            delay(13000)
+                            durationVox = getInput()?.toLongOrNull() ?: 50
+                            if (durationVox > 1000) {
+                                speakText("Ожидается значение от 0 до 1000 милисекунд", false)
+                                setInput("")
+                                flagVox = false
+                            } else {
+                                delay(5000)
+                                playDtmfTone(0, 1000, durationVox)
+                                delay(4000)
+                                setInput("")
+                                flagVox = false
+                                speakText(
+                                    "Был проигран тон с длительностью $durationVox милисекунд",
+                                    false
+                                )
+                            }
                         }
+                    } else  {
+                        speakText("Команда заблокирована", false)
+                        setInput("")
                     }
                 }
 
                 // Прямой ввод частоты субтонов
-//                else if (input == "58" && (getCall() == null && block)) {
-//                    playSoundJob.launch {
-//                        speakText("Введите частоту субтона", false)
-//                        setInput("")
-//                        delay(10000)
-//                        val userInput = getInput()
-//                        if (userInput != null && userInput.length > 4) {
-//                            speakText("Введите не более 4 цифр", false)
+//                else if (input == "58") {
+//                    if (getCall() == null && block) {
+//                        playSoundJob.launch {
+//                            speakText("Введите частоту субтона", false)
 //                            setInput("")
-//                        } else {
-//                            // Преобразуем ввод в число
-//                            val inputValue = userInput?.toLongOrNull() ?: 1230
-//                            val formattedValue = String.format("%.1f", inputValue / 10.0)
-//                            val finalValue = formattedValue.replace(',', '.')
-//                            playSineWave(finalValue.toDouble())
-//                            setInput("")
+//                            delay(10000)
+//                            val userInput = getInput()
+//                            if (userInput != null && userInput.length > 4) {
+//                                speakText("Введите не более 4 цифр", false)
+//                                setInput("")
+//                            } else {
+//                                // Преобразуем ввод в число
+//                                val inputValue = userInput?.toLongOrNull() ?: 1230
+//                                val formattedValue = String.format("%.1f", inputValue / 10.0)
+//                                val finalValue = formattedValue.replace(',', '.')
+//                                playSineWave(finalValue.toDouble())
+//                                setInput("")
+//                            }
 //                        }
+//                    } else  {
+//                        speakText("Команда заблокирована", false)
+//                        setInput("")
 //                    }
 //                }
 
-                // Проигрывание DTMF тонов от 0 до 9
-                else if (input == "55" && (getCall() == null && block)) {
-                    delayTon1000hz(1500) { playDtmfTones(200, 200) }
-                    setInput("")
+                // Проигрывание DTMF тонов от 0 до 9 для проверки гальванической развязки
+                else if (input == "55") {
+                    if (getCall() == null && block) {
+                        delayTon1000hz(1500) { playDtmfTones(300, 300) }
+                        setInput("")
+                    } else  {
+                        speakText("Команда заблокирована", false)
+                        setInput("")
+                    }
                 }
 
-                else if (input == "66"  && (getCall() == null && block)) {
-                    if (volumeLevelCtcss < 0.01) {
-                        val step = 0.001f // Шаг увеличения громкости
-                        volumeLevelCtcss += step
-                        if (volumeLevelCtcss > 0.01) {
-                            volumeLevelCtcss = 0.01f // Устанавливаем максимальное значение
-                        }
-                       // speakText("Громкость субтона увеличена и теперь составляет ${formatVolumeLevel(volumeLevelCtcss)}", false)
-                    } else {
-                       // speakText("Достигнут максимальный уровень громкости", false)
-                    }
-                    setInput("")
-                }
+                // Команда на увеличение громкости тонов CTCSS
+//                else if (input == "66") {
+//                    if (getCall() == null && block) {
+//                        if (volumeLevelCtcss < 0.01) {
+//                            val step = 0.001f // Шаг увеличения громкости
+//                            volumeLevelCtcss += step
+//                            if (volumeLevelCtcss > 0.01) {
+//                                volumeLevelCtcss = 0.01f // Устанавливаем максимальное значение
+//                            }
+//                            speakText(
+//                                "Громкость субтона увеличена и теперь составляет ${
+//                                    formatVolumeLevel(
+//                                        volumeLevelCtcss
+//                                    )
+//                                }", false
+//                            )
+//                        } else {
+//                            speakText("Достигнут максимальный уровень громкости", false)
+//                        }
+//                        setInput("")
+//                    } else  {
+//                        speakText("Команда заблокирована", false)
+//                        setInput("")
+//                    }
+//                }
 
                 // Команда на увеличение громкости речевых сообщений
-                else if (input == "77" && (getCall() == null && block)) {
-                    if (volumeLevelTts < 100) {
-                        val step = if (volumeLevelTts < 30) 1 else 10
-                        volumeLevelTts += step
-                        setVolumeTts(volumeLevelTts)
-                        if (volumeLevelTts > 100) {
-                            volumeLevelTts = 100
+                else if (input == "77") {
+                    if (getCall() == null && block) {
+                        if (volumeLevelTts < 100) {
+                            val step = if (volumeLevelTts < 30) 1 else 10
+                            volumeLevelTts += step
+                            setVolumeTts(volumeLevelTts)
+                            if (volumeLevelTts > 100) {
+                                volumeLevelTts = 100
+                            }
+                            speakText(
+                                "Громкость речевых сообщений увеличена и теперь составляет $volumeLevelTts процентов",
+                                false
+                            )
+                        } else {
+                            speakText("Достигнут максимальный уровень громкости", false)
                         }
-                        speakText("Громкость речевых сообщений увеличена и теперь составляет $volumeLevelTts процентов", false)
-                    } else {
-                        speakText("Достигнут максимальный уровень громкости", false)
+                        setInput("")
+                    } else  {
+                        speakText("Команда заблокирована", false)
+                        setInput("")
                     }
-                    setInput("")
                 }
 
                 // Команда на увеличение громкости звонка
-                else if (input == "88" && (getCall() == null && block)) {
-                    if (volumeLevelCall < 100) {
-                        val step = if (volumeLevelCall < 30) 1 else 10
-                        volumeLevelCall += step
-                        setVolumeCall(volumeLevelCall)
-                        if (volumeLevelCall > 100) {
-                            volumeLevelCall = 100
+                else if (input == "88") {
+                    if (getCall() == null && block) {
+                        if (volumeLevelCall < 100) {
+                            val step = if (volumeLevelCall < 30) 1 else 10
+                            volumeLevelCall += step
+                            setVolumeCall(volumeLevelCall)
+                            if (volumeLevelCall > 100) {
+                                volumeLevelCall = 100
+                            }
+                            speakText(
+                                "Громкость вызова увеличена и теперь составляет $volumeLevelCall процентов",
+                                false
+                            )
+                        } else {
+                            speakText("Достигнут максимальный уровень громкости", false)
                         }
-                        speakText("Громкость вызова увеличена и теперь составляет $volumeLevelCall процентов", false)
-                    } else {
-                        speakText("Достигнут максимальный уровень громкости", false)
+                        setInput("")
+                    } else  {
+                        speakText("Команда заблокирована", false)
+                        setInput("")
                     }
-                    setInput("")
                 }
 
                 // Установка времени тона активации для устранения проглатывания начальных слов всех речевых сообщений
-                else if (input == "99" && (getCall() == null && block)) {
-                    setInput("")
-                    playSoundJob.launch {
+                else if (input == "99") {
+                    if (getCall() == null && block) {
+                        setInput("")
+                        playSoundJob.launch {
                         speakText("Введите длительность тона активации", false)
                         delay(14000)
                         val activationTimeInput = getInput()
                         val activationTime = activationTimeInput?.toLongOrNull()
                         if (activationTime != null && activationTime in 0..2000) {
                             voxActivation = activationTime
-                            speakText("Длительность тона установлена на $activationTimeInput миллисекунд", false)
+                            speakText(
+                                "Длительность тона установлена на $activationTimeInput миллисекунд",
+                                false
+                            )
                         } else {
                             speakText("Ожидается значение от нуля до двух тысяч", false)
                         }
+                        setInput("")
+                        }
+                    }  else  {
+                        speakText("Команда заблокирована", false)
                         setInput("")
                     }
                 }
@@ -1327,57 +1408,83 @@ class MainRepositoryImpl(
                     }
 
                     // Команда отключения генерации тонов CTCSS
-//                    else if (input == "58"  && (getCall() == null && block)) {
-//                        stopPlayback()
+//                    else if (input == "58") {
+//                        if (getCall() == null && block) {
+//                            stopPlayback()
+//                            setInput("")
+//                        } else  {
+//                        speakText("Команда заблокирована", false)
 //                        setInput("")
+//                        }
 //                    }
 
                     // Команда на уменьшение громкости тонов CTCSS
-                    else if (input == "66"  && (getCall() == null && block)) {
-                        if (volumeLevelCtcss > 0) {
-                            val step = 0.001f // Шаг уменьшения громкости
-                            volumeLevelCtcss -= step
-                            if (volumeLevelCtcss < 0) {
-                                volumeLevelCtcss = 0f // Устанавливаем минимальное значение
-                            }
-                            Log.e("Контрольный лог", "АМПЛИТУДА : $volumeLevelCtcss")
-                          // speakText("Громкость субтона уменьшена и теперь составляет ${formatVolumeLevel(volumeLevelCtcss)}", false)
-                        } else {
-                          //  speakText("Достигнут минимальный уровень громкости", false)
-                        }
-                        setInput("")
-                    }
+//                    else if (input == "66") {
+//                    if (getCall() == null && block) {
+//                        if (volumeLevelCtcss > 0) {
+//                            val step = 0.001f // Шаг уменьшения громкости
+//                            volumeLevelCtcss -= step
+//                            if (volumeLevelCtcss < 0) {
+//                                volumeLevelCtcss = 0f // Устанавливаем минимальное значение
+//                            }
+//                            Log.e("Контрольный лог", "АМПЛИТУДА : $volumeLevelCtcss")
+//                           speakText("Громкость субтона уменьшена и теперь составляет ${formatVolumeLevel(volumeLevelCtcss)}", false)
+//                        } else {
+//                            speakText("Достигнут минимальный уровень громкости", false)
+//                        }
+//                        setInput("")
+//                        } else  {
+//                        speakText("Команда заблокирована", false)
+//                        setInput("")
+//                        }
+//                    }
 
                     // Команда на уменьшение громкости речевых сообщений
-                    else if (input == "77"  && (getCall() == null && block)) {
-                        if (volumeLevelTts > 0) {
-                            val step = if (volumeLevelTts <= 30) 1 else 10
-                            volumeLevelTts -= step
-                            setVolumeTts(volumeLevelTts)
-                            if (volumeLevelTts < 0) {
-                                volumeLevelTts = 0
+                    else if (input == "77") {
+                        if (getCall() == null && block) {
+                            if (volumeLevelTts > 0) {
+                                val step = if (volumeLevelTts <= 30) 1 else 10
+                                volumeLevelTts -= step
+                                setVolumeTts(volumeLevelTts)
+                                if (volumeLevelTts < 0) {
+                                    volumeLevelTts = 0
+                                }
+                                speakText(
+                                    "Громкость речевых сообщений уменьшена и теперь составляет $volumeLevelTts процентов",
+                                    false
+                                )
+                            } else {
+                                speakText("Достигнут минимальный уровень громкости", false)
                             }
-                            speakText("Громкость речевых сообщений уменьшена и теперь составляет $volumeLevelTts процентов", false)
-                        } else {
-                            speakText("Достигнут минимальный уровень громкости", false)
+                            setInput("")
+                        } else  {
+                            speakText("Команда заблокирована", false)
+                            setInput("")
                         }
-                        setInput("")
                     }
 
                     // Команда на уменьшение громкости звонка
-                    else if (input == "88" && getCall() == null) {
-                        if (volumeLevelCall > 0) {
-                            val step = if (volumeLevelCall <= 30) 1 else 10
-                            volumeLevelCall -= step
-                            setVolumeCall(volumeLevelCall)
-                            if (volumeLevelCall < 0) {
-                                volumeLevelCall = 0
+                    else if (input == "88") {
+                        if (getCall() == null && block) {
+                            if (volumeLevelCall > 0) {
+                                val step = if (volumeLevelCall <= 30) 1 else 10
+                                volumeLevelCall -= step
+                                setVolumeCall(volumeLevelCall)
+                                if (volumeLevelCall < 0) {
+                                    volumeLevelCall = 0
+                                }
+                                speakText(
+                                    "Громкость вызова уменьшена и теперь составляет $volumeLevelCall процентов",
+                                    false
+                                )
+                            } else {
+                                speakText("Достигнут минимальный уровень громкости", false)
                             }
-                            speakText("Громкость вызова уменьшена и теперь составляет $volumeLevelCall процентов", false)
-                        } else {
-                            speakText("Достигнут минимальный уровень громкости", false)
+                            setInput("")
+                        } else  {
+                            speakText("Команда заблокирована", false)
+                            setInput("")
                         }
-                        setInput("")
                     }
 
                     // Блокировка служебных команд

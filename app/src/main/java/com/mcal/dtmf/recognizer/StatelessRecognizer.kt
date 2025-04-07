@@ -31,8 +31,8 @@ class StatelessRecognizer(private val spectrum: Spectrum) : KoinComponent {
         val highMax = getMax(75, 150)
         val outputFrequency = getMax(0, 500) * 15.625f
 
-        //Log.d("Контрольный лог", "ЧАСТОТА РАВНА: $outputFrequency")
-
+//        Log.e("Контрольный лог", "Н: $lowMax")
+//        Log.e("Контрольный лог", "В: $highMax")
         // Проверка на частоту 1000 Гц для определения первой радиостанций
         if (outputFrequency == 1000.0f) {
             return 'R'
