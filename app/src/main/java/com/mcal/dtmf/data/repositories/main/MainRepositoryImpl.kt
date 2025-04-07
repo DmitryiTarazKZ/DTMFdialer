@@ -110,7 +110,8 @@ class MainRepositoryImpl(
     private var isRecording = false
     private var audioTrack: AudioTrack? = null
     private var isPlaying = false
-    private var volumeLevelCtcss: Float = 0.005f
+    private var volumeLevelCtcss: Double = 0.3
+    private var frequencyCtcss: Double = 123.0
 
     init {
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -256,24 +257,27 @@ class MainRepositoryImpl(
         }
     }
 
-    // ГЕНЕРАЦИЯ СУБТОНА ДЛЯ СЕЛЕКТИВНОГО ВЫЗОВА
     private fun playSineWave(frequency: Double) {
-
         val SAMPLE_RATE = 44100 // Частота дискретизации
         val cutoffFrequency = 260.0 // Частота среза фильтра Баттерворта
         val order = 2 // Порядок фильтра
 
+        // Инициализация AudioTrack
         if (audioTrack == null) {
             audioTrack = AudioTrack(
                 AudioManager.STREAM_MUSIC,
                 SAMPLE_RATE,
                 AudioFormat.CHANNEL_OUT_MONO,
                 AudioFormat.ENCODING_PCM_16BIT,
-                AudioTrack.getMinBufferSize(SAMPLE_RATE,
-                    AudioFormat.CHANNEL_OUT_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT),
+                AudioTrack.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT),
                 AudioTrack.MODE_STREAM
             )
+        }
+
+        // Проверка состояния AudioTrack
+        if (audioTrack?.state != AudioTrack.STATE_INITIALIZED) {
+            Log.e("AudioTrack", "AudioTrack не инициализирован")
+            return
         }
 
         if (!isPlaying) {
@@ -332,7 +336,15 @@ class MainRepositoryImpl(
                         byteBuffer[2 * i + 1] = (clampedValue shr 8 and 0xFF).toByte()
                     }
 
-                    audioTrack?.write(byteBuffer, 0, byteBuffer.size)
+                    // Запись в AudioTrack с обработкой ошибок
+                    val result = audioTrack?.write(byteBuffer, 0, byteBuffer.size)
+                    if (result == AudioTrack.ERROR_INVALID_OPERATION) {
+                        Log.e("AudioTrack", "Ошибка записи: INVALID_OPERATION")
+                        break
+                    } else if (result == AudioTrack.ERROR) {
+                        Log.e("AudioTrack", "Ошибка записи: ERROR")
+                        break
+                    }
                 }
             }
         }
@@ -342,8 +354,8 @@ class MainRepositoryImpl(
         if (isPlaying) {
             isPlaying = false
             audioTrack?.stop()
-            audioTrack?.release()
-            audioTrack = null
+            // audioTrack?.release() // Не освобождайте, если хотите использовать его повторно
+            // audioTrack = null // Не обнуляйте, если хотите использовать его повторно
         }
     }
 
@@ -612,6 +624,9 @@ class MainRepositoryImpl(
 
     // Функция для воспроизведения записанного файла
     private fun playRecordedFile(index: Int, trimDurationMs: Int) {
+
+        if (frequencyCtcss != 0.0) { playSineWave(frequencyCtcss) } // Задаем нужный субтон
+
         // Проверяем, что индекс находится в допустимом диапазоне
         if (index < 0 || index >= recordedFiles.size) {
             speakText("Записи с таким номером нет", false)
@@ -680,6 +695,7 @@ class MainRepositoryImpl(
 
             audioTrack.stop() // Останавливаем воспроизведение после завершения
             audioTrack.release() // Освобождаем ресурсы
+            if (frequencyCtcss != 0.0) { stopPlayback() } // Отключаем субтон
         } else {
             // Если файл не существует, произносим сообщение
             speakText("Нет записанных файлов", false)
@@ -1098,30 +1114,30 @@ class MainRepositoryImpl(
                 }
 
                 // Прямой ввод частоты субтонов
-//                else if (input == "58") {
-//                    if (getCall() == null && block) {
-//                        playSoundJob.launch {
-//                            speakText("Введите частоту субтона", false)
-//                            setInput("")
-//                            delay(10000)
-//                            val userInput = getInput()
-//                            if (userInput != null && userInput.length > 4) {
-//                                speakText("Введите не более 4 цифр", false)
-//                                setInput("")
-//                            } else {
-//                                // Преобразуем ввод в число
-//                                val inputValue = userInput?.toLongOrNull() ?: 1230
-//                                val formattedValue = String.format("%.1f", inputValue / 10.0)
-//                                val finalValue = formattedValue.replace(',', '.')
-//                                playSineWave(finalValue.toDouble())
-//                                setInput("")
-//                            }
-//                        }
-//                    } else  {
-//                        speakText("Команда заблокирована", false)
-//                        setInput("")
-//                    }
-//                }
+                else if (input == "58") {
+                    if (getCall() == null && block) {
+                        playSoundJob.launch {
+                            speakText("Введите частоту субтона", false)
+                            setInput("")
+                            delay(12000)
+                            val userInput = getInput()
+                            if (userInput != null && userInput.length > 4) {
+                                speakText("Введите не более 4 цифр", false)
+                                setInput("")
+                            } else {
+                                // Преобразуем ввод в число
+                                val inputValue = userInput?.toLongOrNull() ?: 1230
+                                val formattedValue = String.format("%.1f", inputValue / 10.0)
+                                val finalValue = formattedValue.replace(',', '.')
+                                playSineWave(finalValue.toDouble())
+                                setInput("")
+                            }
+                        }
+                    } else  {
+                        speakText("Команда заблокирована", false)
+                        setInput("")
+                    }
+                }
 
                 // Проигрывание DTMF тонов от 0 до 9 для проверки гальванической развязки
                 else if (input == "55") {
@@ -1135,30 +1151,24 @@ class MainRepositoryImpl(
                 }
 
                 // Команда на увеличение громкости тонов CTCSS
-//                else if (input == "66") {
-//                    if (getCall() == null && block) {
-//                        if (volumeLevelCtcss < 0.01) {
-//                            val step = 0.001f // Шаг увеличения громкости
-//                            volumeLevelCtcss += step
-//                            if (volumeLevelCtcss > 0.01) {
-//                                volumeLevelCtcss = 0.01f // Устанавливаем максимальное значение
-//                            }
-//                            speakText(
-//                                "Громкость субтона увеличена и теперь составляет ${
-//                                    formatVolumeLevel(
-//                                        volumeLevelCtcss
-//                                    )
-//                                }", false
-//                            )
-//                        } else {
-//                            speakText("Достигнут максимальный уровень громкости", false)
-//                        }
-//                        setInput("")
-//                    } else  {
-//                        speakText("Команда заблокирована", false)
-//                        setInput("")
-//                    }
-//                }
+                else if (input == "66") {
+                    if (getCall() == null && block) {
+                        if (volumeLevelCtcss < 0.3) {
+                            val step = 0.01 // Шаг увеличения громкости
+                            volumeLevelCtcss += step
+                            if (volumeLevelCtcss > 0.3) {
+                                volumeLevelCtcss = 0.3 // Устанавливаем максимальное значение
+                            }
+                            speakText("Громкость субтона увеличена и теперь составляет ${formatVolumeLevel(volumeLevelCtcss)}", false)
+                        } else {
+                            speakText("Достигнут максимальный уровень громкости", false)
+                        }
+                        setInput("")
+                    } else  {
+                        speakText("Команда заблокирована", false)
+                        setInput("")
+                    }
+                }
 
                 // Команда на увеличение громкости речевых сообщений
                 else if (input == "77") {
@@ -1408,36 +1418,36 @@ class MainRepositoryImpl(
                     }
 
                     // Команда отключения генерации тонов CTCSS
-//                    else if (input == "58") {
-//                        if (getCall() == null && block) {
-//                            stopPlayback()
-//                            setInput("")
-//                        } else  {
-//                        speakText("Команда заблокирована", false)
-//                        setInput("")
-//                        }
-//                    }
+                    else if (input == "58") {
+                        if (getCall() == null && block) {
+                            stopPlayback()
+                            setInput("")
+                        } else  {
+                        speakText("Команда заблокирована", false)
+                        setInput("")
+                        }
+                    }
 
                     // Команда на уменьшение громкости тонов CTCSS
-//                    else if (input == "66") {
-//                    if (getCall() == null && block) {
-//                        if (volumeLevelCtcss > 0) {
-//                            val step = 0.001f // Шаг уменьшения громкости
-//                            volumeLevelCtcss -= step
-//                            if (volumeLevelCtcss < 0) {
-//                                volumeLevelCtcss = 0f // Устанавливаем минимальное значение
-//                            }
-//                            Log.e("Контрольный лог", "АМПЛИТУДА : $volumeLevelCtcss")
-//                           speakText("Громкость субтона уменьшена и теперь составляет ${formatVolumeLevel(volumeLevelCtcss)}", false)
-//                        } else {
-//                            speakText("Достигнут минимальный уровень громкости", false)
-//                        }
-//                        setInput("")
-//                        } else  {
-//                        speakText("Команда заблокирована", false)
-//                        setInput("")
-//                        }
-//                    }
+                    else if (input == "66") {
+                    if (getCall() == null && block) {
+                        if (volumeLevelCtcss > 0.0) {
+                            val step = 0.01 // Шаг уменьшения громкости
+                            volumeLevelCtcss -= step
+                            if (volumeLevelCtcss < 0.0) {
+                                volumeLevelCtcss = 0.0 // Устанавливаем минимальное значение
+                            }
+                            Log.e("Контрольный лог", "АМПЛИТУДА : $volumeLevelCtcss")
+                           speakText("Громкость субтона уменьшена и теперь составляет ${formatVolumeLevel(volumeLevelCtcss)}", false)
+                        } else {
+                            speakText("Достигнут минимальный уровень громкости", false)
+                        }
+                        setInput("")
+                        } else  {
+                        speakText("Команда заблокирована", false)
+                        setInput("")
+                        }
+                    }
 
                     // Команда на уменьшение громкости речевых сообщений
                     else if (input == "77") {
@@ -1512,10 +1522,22 @@ class MainRepositoryImpl(
                         isTorchOn = true
 
                         if (isTorchOnIs == 111 && getInput() == "") {
-                            if (key == 'R') { speakText("Первая радиостанция",false) }
-                            if (key == 'S') { speakText("Вторая радиостанция",false) }
-                            if (key == 'T') { speakText("Третья радиостанция",false) }
-                            if (key == 'V') { speakText("Четвертая радиостанция",false) }
+                            if (key == 'R') { // Частота распознавания 1000гц
+                                frequencyCtcss = 203.5 // Выбран из списка стандарта TS 103 236 - V1.1.1 в котором 39 тонов
+                                speakText("Первая радиостанция",false)
+                            }
+                            if (key == 'S') { // Частота распознавания 1450гц
+                                frequencyCtcss = 218.1 // Выбран из списка стандарта TS 103 236 - V1.1.1 в котором 39 тонов
+                                speakText("Вторая радиостанция",false)
+                            }
+                            if (key == 'T') { // Частота распознавания 1750гц
+                                frequencyCtcss = 233.6 // Выбран из списка стандарта TS 103 236 - V1.1.1 в котором 39 тонов
+                                speakText("Третья радиостанция",false)
+                            }
+                            if (key == 'V') { // Частота распознавания 2100гц
+                                frequencyCtcss = 250.3 // Выбран из списка стандарта TS 103 236 - V1.1.1 в котором 39 тонов
+                                speakText("Четвертая радиостанция",false)
+                            }
                         }
 
                         if (getInput() == "000" || getInput() == "111" || getInput() == "555") {
@@ -1561,7 +1583,7 @@ class MainRepositoryImpl(
     }
 
     // Функция для преобразования значения в текстовый формат
-    private fun formatVolumeLevel(volume: Float): String {
+    private fun formatVolumeLevel(volume: Double): String {
         // Преобразуем значение в строку с двумя знаками после запятой
         val formattedVolume = String.format("%.2f", volume)
 
@@ -1591,13 +1613,18 @@ class MainRepositoryImpl(
         }
     }
 
+    private var callCount = 0 // Счетчик вызовов функции
+
     override fun speakText(text: String, flagVoise: Boolean) {
-//        if (text != "Номеронабиратель, очищен") {
-//        playSineWave(196.6) }
+
+        if (frequencyCtcss != 0.0) { playSineWave(frequencyCtcss) } // Воспроизводим соответствующий CTCSS (если значение = 0.0 то тон не воспроизводится)
+
         if (isSpeaking) { return }
 
         textToSpeech = TextToSpeech(context.applicationContext) { status ->
-            if (status == TextToSpeech.SUCCESS) { textToSpeech.language = Locale.getDefault() }
+            if (status == TextToSpeech.SUCCESS) {
+                textToSpeech.language = Locale.getDefault()
+            }
 
             isSpeaking = true
 
@@ -1609,7 +1636,7 @@ class MainRepositoryImpl(
                     textToSpeech.setOnUtteranceProgressListener(null)
                     textToSpeech.stop()
                     textToSpeech.shutdown()
-//                    stopPlayback()
+                    if (frequencyCtcss != 0.0) { stopPlayback() }
                 }
 
                 override fun onError(utteranceId: String?) {}
@@ -1620,7 +1647,7 @@ class MainRepositoryImpl(
             CoroutineScope(Dispatchers.Main).launch {
                 if (text != "Один. Два. Три. Четыре. Пять. Поверка работоспособности вокс системы. Шесть. Семь. Восемь. Девять. Десять") {
                     delayTon1000hz(1500) { textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId) }
-                }  else {
+                } else {
                     delay(1500)
                     textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
                 }
