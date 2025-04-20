@@ -1,30 +1,22 @@
 package com.mcal.dtmf.data.repositories.main
 
-import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Application
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.hardware.camera2.CameraManager
-import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
-import android.media.AudioTrack
 import android.media.MediaRecorder
-import android.media.ToneGenerator
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
-import android.os.StatFs
 import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.telecom.Call
-import android.util.Log
-import androidx.core.app.ActivityCompat
 import com.mcal.dtmf.recognizer.DataBlock
 import com.mcal.dtmf.recognizer.Recognizer
 import com.mcal.dtmf.recognizer.Spectrum
@@ -39,6 +31,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flow
@@ -46,18 +39,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
-import java.io.File
-import java.io.FileInputStream
-import java.io.FileOutputStream
 import java.util.Locale
 import java.util.concurrent.LinkedBlockingQueue
-import kotlin.coroutines.cancellation.CancellationException
-import kotlin.math.PI
 import kotlin.math.abs
-import kotlin.math.sin
-import kotlin.math.sqrt
-import kotlin.math.tan
 import kotlin.time.DurationUnit
 import kotlin.time.toDuration
 
@@ -66,7 +50,7 @@ class MainRepositoryImpl(
     private var textToSpeech: TextToSpeech,
 
     ) : MainRepository {
-    private var utils = Utils(this, CoroutineScope(Dispatchers.IO))
+    private var utils = Utils(this, CoroutineScope(Dispatchers.IO), context)
     private var job = SupervisorJob()
     private var scope = CoroutineScope(Dispatchers.IO + job)
     private var recorderJob = scope
@@ -80,9 +64,12 @@ class MainRepositoryImpl(
     private val _call: MutableStateFlow<Call?> = MutableStateFlow(null)
     private val _callState: MutableStateFlow<Int> = MutableStateFlow(Call.STATE_DISCONNECTED)
     private val _powerState: MutableStateFlow<Boolean?> = MutableStateFlow(null)
+    private val _isRecording: MutableStateFlow<Boolean?> = MutableStateFlow(null)
     private val _amplitudeCheck: MutableStateFlow<Boolean?> = MutableStateFlow(null)
     private val _sim: MutableStateFlow<Int> = MutableStateFlow(0)
-    private val recordedFiles = mutableListOf<String>() // Список для хранения путей к голосовым заметкам
+    private val _frequencyCtcss: MutableStateFlow<Double> = MutableStateFlow(0.0)
+    private val _volumeLevelCtcss: MutableStateFlow<Double> = MutableStateFlow(0.08)
+    private val _recordedFiles = mutableListOf<String>()
 
     private val blockingQueue = LinkedBlockingQueue<DataBlock>()
     private val recognizer = Recognizer()
@@ -108,15 +95,10 @@ class MainRepositoryImpl(
     private var periodVox = 2500L
     private var ton = 0
     private var block = false
-    private var availableMB = 0L
 
-    private var audioRecord1: AudioRecord? = null
-    private var recordedFilePath: String? = null
-    private var isRecording = false
-    private var audioTrack: AudioTrack? = null
-    private var isPlaying = false
-    private var volumeLevelCtcss: Double = 0.1  // ниже 0.05 перестает срабатывать если поднять выше 0.15 тон становится слышен в приемном тракте
-    private var frequencyCtcss: Double = 0.0  // Субтона по умолчанию отключены
+
+    private var subscribersNumber = 0
+    private val subscribers = mutableSetOf<Char>()
 
     init {
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -186,227 +168,6 @@ class MainRepositoryImpl(
         )
     }
 
-    // Контрольные тона для отладки VOX
-    private fun playDtmfTones(period: Long, duration: Long) {
-        playSoundJob.launch {
-            val dtmfDigits = listOf(
-                ToneGenerator.TONE_DTMF_0,
-                ToneGenerator.TONE_DTMF_1,
-                ToneGenerator.TONE_DTMF_2,
-                ToneGenerator.TONE_DTMF_3,
-                ToneGenerator.TONE_DTMF_4,
-                ToneGenerator.TONE_DTMF_5,
-                ToneGenerator.TONE_DTMF_6,
-                ToneGenerator.TONE_DTMF_7,
-                ToneGenerator.TONE_DTMF_8,
-                ToneGenerator.TONE_DTMF_9,
-                ToneGenerator.TONE_DTMF_P
-            )
-
-            for (i in dtmfDigits.indices) {
-              delay(period) // период проигрывания
-            playDtmfTone(dtmfDigits[i], period, duration)
-            }
-        }
-    }
-
-    private fun playDtmfTone(tone: Int, period: Long, duration: Long) {
-        val toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 100) // 100 - громкость
-        playSoundJob.launch {
-            toneGenerator.startTone(tone, duration.toInt()) // Длительность тона
-            delay(period) // период проигрывания
-            toneGenerator.release()
-        }
-    }
-
-    private fun voxActivation(delayMillis: Long = 2000, onComplete: suspend () -> Unit) {
-        val sampleRate = 44100 // Частота дискретизации
-        val frequency = 800.0 // Частота звука (не допустимо выбирать частоту активации кратной или равной тонам определения)
-        val duration = voxActivation // Длительность звука в миллисекундах
-        val bufferSize = (sampleRate * duration / 1000).toInt() // Размер буфера
-
-        playSoundJob.launch {
-            try {
-                delay(delayMillis)
-
-                // Создание звука
-                val buffer = ShortArray(bufferSize)
-                val angleIncrement = 2.0 * Math.PI * frequency / sampleRate
-                var angle = 0.0
-
-                for (i in buffer.indices) {
-                    buffer[i] = (Short.MAX_VALUE * sin(angle)).toInt().toShort()
-                    angle += angleIncrement
-                    if (angle >= 2 * Math.PI) angle -= 2 * Math.PI
-                }
-
-                // Воспроизведение звука
-                val audioTrack = AudioTrack.Builder()
-                    .setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                            .build()
-                    )
-                    .setAudioFormat(
-                        AudioFormat.Builder()
-                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                            .setSampleRate(sampleRate)
-                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                            .build()
-                    )
-                    .setBufferSizeInBytes(AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT))
-                    .setTransferMode(AudioTrack.MODE_STREAM)
-                    .build()
-
-                audioTrack.play()
-                audioTrack.write(buffer, 0, buffer.size)
-                audioTrack.stop()
-                audioTrack.release()
-
-                onComplete()
-            } catch (e: CancellationException) {
-                // Обработка отмены
-            }
-        }
-    }
-
-    private fun playCTCSS(frequency: Double) {
-        val sampleRate = 44100 // Частота дискретизации
-        val lowCutoffFrequency = frequency * 0.8 // Нижняя частота среза (например, 80% от частоты)
-        val highCutoffFrequency = frequency * 1.2 // Верхняя частота среза (например, 120% от частоты)
-        val order = 2 // Порядок фильтра
-
-        // Инициализация AudioTrack
-        if (audioTrack == null) {
-            audioTrack = AudioTrack.Builder()
-                .setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                        .build()
-                )
-                .setAudioFormat(
-                    AudioFormat.Builder()
-                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                        .setSampleRate(sampleRate)
-                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                        .build()
-                )
-                .setBufferSizeInBytes(AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT))
-                .setTransferMode(AudioTrack.MODE_STREAM)
-                .build()
-        }
-
-        // Проверка состояния AudioTrack
-        if (audioTrack?.state != AudioTrack.STATE_INITIALIZED) {
-            Log.e("AudioTrack", "AudioTrack не инициализирован")
-            return
-        }
-
-        if (!isPlaying) {
-            audioTrack?.play()
-            isPlaying = true
-
-            val bufferSize = sampleRate / 2 // Увеличиваем размер буфера для более плавного сигнала
-            val buffer = FloatArray(bufferSize) // Используем FloatArray для большей точности
-            val angleIncrement = 2.0 * Math.PI * frequency / sampleRate
-            var angle = 0.0
-
-            // Параметры фильтра Баттерворта
-            val a = DoubleArray(order + 1) // Коэффициенты фильтра
-            val b = DoubleArray(order + 1) // Коэффициенты фильтра
-            val x = DoubleArray(order + 1) // Входные значения
-            val y = DoubleArray(order + 1) // Выходные значения
-            val yHigh = DoubleArray(order + 1) // Выходные значения для верхнего фильтра
-
-            // Расчет коэффициентов фильтра Баттерворта для полосового фильтра
-            val nyquist = sampleRate / 2.0
-            val normalizedLowCutoff = lowCutoffFrequency / nyquist
-            val normalizedHighCutoff = highCutoffFrequency / nyquist
-
-            // Расчет коэффициентов для нижнего фильтра
-            val wcLow = tan(PI * normalizedLowCutoff)
-            val kLow = 1.0 / (1.0 + sqrt(2.0) * wcLow + wcLow * wcLow)
-            b[0] = kLow
-            b[1] = 2 * b[0]
-            b[2] = b[0]
-            a[1] = 2 * (1 - wcLow * wcLow) * kLow
-            a[2] = (1 - sqrt(2.0) * wcLow + wcLow * wcLow) * kLow
-
-            // Расчет коэффициентов для верхнего фильтра
-            val wcHigh = tan(PI * normalizedHighCutoff)
-            val kHigh = 1.0 / (1.0 + sqrt(2.0) * wcHigh + wcHigh * wcHigh)
-            val bHigh = DoubleArray(order + 1)
-            val aHigh = DoubleArray(order + 1)
-            bHigh[0] = kHigh
-            bHigh[1] = 2 * bHigh[0]
-            bHigh[2] = bHigh[0]
-            aHigh[1] = 2 * (1 - wcHigh * wcHigh) * kHigh
-            aHigh[2] = (1 - sqrt(2.0) * wcHigh + wcHigh * wcHigh) * kHigh
-
-            playSoundJob.launch {
-                while (isPlaying) {
-                    for (i in 0 until bufferSize) {
-                        val rawValue = volumeLevelCtcss * sin(angle) // Генерация синусоиды
-
-                        // Применение нижнего фильтра Баттерворта
-                        x[0] = rawValue
-                        y[0] = b[0] * x[0] + b[1] * x[1] + b[2] * x[2] - a[1] * y[1] - a[2] * y[2]
-                        // Сдвиг значений
-                        for (j in order downTo 1) {
-                            x[j] = x[j - 1]
-                            y[j] = y[j - 1]
-                        }
-
-                        // Применение верхнего фильтра Баттерворта
-                        val filteredValue = y[0]
-                        x[0] = filteredValue
-                        yHigh[0] = bHigh[0] * x[0] + bHigh[1] * x[1] + bHigh[2] * x[2] - aHigh[1] * yHigh[1] - aHigh[2] * yHigh[2]
-                        // Сдвиг значений для верхнего фильтра
-                        for (j in order downTo 1) {
-                            x[j] = x[j - 1]
-                            yHigh[j] = yHigh[j - 1]
-                        }
-
-                        buffer[i] = yHigh[0].toFloat() // Запись отфильтрованного значения
-                        angle += angleIncrement
-                        if (angle >= 2 * Math.PI) angle -= 2 * Math.PI
-                    }
-
-                    // Преобразование FloatArray в ByteArray
-                    val byteBuffer = ByteArray(bufferSize * 2)
-                    for (i in buffer.indices) {
-                        val value = (buffer[i] * 32767).toInt() // Преобразование в 16-битный формат
-                        // Ограничиваем значения, чтобы избежать клиппинга
-                        val clampedValue = value.coerceIn(-32768, 32767)
-                        byteBuffer[2 * i] = (clampedValue and 0xFF).toByte()
-                        byteBuffer[2 * i + 1] = (clampedValue shr 8 and 0xFF).toByte()
-                    }
-
-                    // Запись в AudioTrack с обработкой ошибок
-                    val result = audioTrack?.write(byteBuffer, 0, byteBuffer.size)
-                    if (result == AudioTrack.ERROR_INVALID_OPERATION) {
-                        Log.e("AudioTrack", "Ошибка записи: INVALID_OPERATION")
-                        break
-                    } else if (result == AudioTrack.ERROR) {
-                        Log.e("AudioTrack", "Ошибка записи: ERROR")
-                        break
-                    }
-                }
-            }
-        }
-    }
-
-    private fun stopPlayback() {
-        if (isPlaying) {
-            isPlaying = false
-            audioTrack?.stop()
-            // audioTrack?.release() // Не освобождайте, если хотите использовать его повторно
-            // audioTrack = null // Не обнуляйте, если хотите использовать его повторно
-        }
-    }
-
     override fun getCallFlow(): Flow<Call?> = flow {
         emitAll(_call)
     }
@@ -419,6 +180,46 @@ class MainRepositoryImpl(
         _call.update { call }
     }
 
+    override fun getFrequencyCtcssFlow(): Flow<Double> = flow {
+        emitAll(_frequencyCtcss)
+    }
+
+    override fun getFrequencyCtcss(): Double {
+        return _frequencyCtcss.value
+    }
+
+    override fun setFrequencyCtcss(frequencyCtcss: Double) {
+        _frequencyCtcss.update { frequencyCtcss }
+    }
+
+    override fun getVolumeLevelCtcssFlow(): Flow<Double> = flow {
+        emitAll(_volumeLevelCtcss)
+    }
+
+    override fun getVolumeLevelCtcss(): Double {
+        return _volumeLevelCtcss.value
+    }
+
+    override fun setVolumeLevelCtcss(volumeLevelCtcss: Double) {
+        _volumeLevelCtcss.update { volumeLevelCtcss }
+    }
+
+    override fun getRecordedFilesFlow(): Flow<String> = flow {
+        emitAll(_recordedFiles.asFlow())
+    }
+
+    override fun getRecordedFiles(): List<String> {
+        return _recordedFiles.toList()
+    }
+
+    override fun setRecordedFiles(recordedFiles: List<String>) {
+        _recordedFiles.addAll(recordedFiles)
+    }
+
+    override fun clearRecordedFiles() {
+        _recordedFiles.clear()
+    }
+
     override fun getCallStateFlow(): Flow<Int> = flow {
         emitAll(_callState)
     }
@@ -428,15 +229,13 @@ class MainRepositoryImpl(
     }
 
     override fun setCallState(callState: Int) {
-        Log.d("Контрольный лог", "ЗНАЧЕНИЕ callState: $callState ЗНАЧЕНИЕ frequencyCtcss: $frequencyCtcss")
-        if (frequencyCtcss != 0.0 && callState == 4) {
-            playCTCSS(frequencyCtcss)
-            Log.d("Контрольный лог", "УСЛОВИЕ  ВНУТРИ CallState СРАБОТАЛО ЗАПУСК")
-        } // Генерируем субтон в поток вызова если трубку подняли
-        if (frequencyCtcss != 0.0 && callState == 7) {
-            stopPlayback()
-            Log.d("Контрольный лог", "УСЛОВИЕ  ВНУТРИ CallState СРАБОТАЛО ОСТАНОВ")
-        } // Прекращаем генерацию если вызов завершен
+        if (getFrequencyCtcss() != 0.0 && (callState == 2 || callState == 1 || callState == 4)) {
+            // Генерируем субтон в поток вызова если входящий, исходящий или трубку подняли
+            utils.playCTCSS(getFrequencyCtcss(), getVolumeLevelCtcss())
+        }
+        if (getFrequencyCtcss() != 0.0 && callState == 7) {
+            utils.stopPlayback() // Прекращаем генерацию если вызов завершен
+        }
         _callState.update { callState }
     }
 
@@ -523,6 +322,25 @@ class MainRepositoryImpl(
         _powerState.update { value }
     }
 
+    override fun getIsRecordingFlow(): Flow<Boolean> = flow {
+        if (_isRecording.value == null) {
+            try {
+                getPower()
+            } catch (ex: Exception) {
+                ex.printStackTrace()
+            }
+        }
+        emitAll(_isRecording.filterNotNull())
+    }
+
+    override fun getIsRecording(): Boolean {
+        return _isRecording.value ?: false
+    }
+
+    override fun setIsRecording(value: Boolean) {
+        _isRecording.update { value }
+    }
+
     override fun getAmplitudeCheckFlow(): Flow<Boolean> = flow {
         if (_amplitudeCheck.value == null) {
             try {
@@ -588,192 +406,6 @@ class MainRepositoryImpl(
         }
     }
 
-    private fun startRecording() {
-        if (ActivityCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            return
-        }
-        availableMB = getAvailableMemoryInMB()
-        if (availableMB < 5) {
-            speakText("В памяти нет места для записи, осталось всего 5 мегабайт. Освободите память", false)
-            return
-        }
-        val sampleRate = 44100
-        val channelConfig = AudioFormat.CHANNEL_IN_MONO
-        val audioFormat = AudioFormat.ENCODING_PCM_16BIT
-        val bufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
-        if (bufferSize <= 0) {
-            return
-        }
-        val fileName = "voice_note_${System.currentTimeMillis()}.pcm" // Сохраняем в формате PCM
-        recordedFilePath = File(context.getExternalFilesDir(null), fileName).absolutePath // Устанавливаем путь к файлу
-        audioRecord1 = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
-            sampleRate,
-            channelConfig,
-            audioFormat,
-            bufferSize
-        )
-        if (audioRecord1?.state != AudioRecord.STATE_INITIALIZED) {
-            return
-        }
-        audioRecord1?.startRecording()
-        isRecording = true
-        val buffer = ShortArray(bufferSize)
-        FileOutputStream(recordedFilePath).use { fos ->
-            while (isRecording) {
-                val readSize = audioRecord1?.read(buffer, 0, buffer.size) ?: 0
-                if (readSize > 0) {
-                    val byteBuffer = ByteArray(readSize * 2)
-                    for (i in 0 until readSize) {
-                        val amplifiedSample = (buffer[i] * 4).coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
-                        byteBuffer[i * 2] = (amplifiedSample and 0xFF).toByte()
-                        byteBuffer[i * 2 + 1] = (amplifiedSample shr 8 and 0xFF).toByte()
-                    }
-                    fos.write(byteBuffer)
-                } else {
-                    // speakText("Ошибка чтения с буфера", false)
-                }
-            }
-        }
-        audioRecord1?.stop()
-        audioRecord1?.release()
-        audioRecord1 = null
-        recordedFiles.add(recordedFilePath!!)
-    }
-
-    // Функция для получения доступной памяти в мегабайтах
-    private fun getAvailableMemoryInMB(): Long {
-        val storageStat = StatFs(context.getExternalFilesDir(null)?.absolutePath)
-        val availableBytes = storageStat.availableBlocksLong * storageStat.blockSizeLong
-        return availableBytes / (1024 * 1024) // Преобразуем байты в мегабайты
-    }
-
-    // Функция для остановки записи
-    private fun stopRecording() {
-        try {
-            if (isRecording) {
-                audioRecord1?.stop() // Останавливаем запись
-                audioRecord1?.release() // Освобождаем ресурсы
-                audioRecord1 = null // Сбрасываем ссылку
-                isRecording = false // Устанавливаем флаг записи в false
-
-                val message = if (availableMB < 100) {
-                    "Запись сохранена. Заканчивается память, осталось $availableMB мегабайт"
-                } else {
-                    "Запись сохранена."
-                }
-                speakText(message, false)
-            }
-        } catch (e: IllegalStateException) {
-            speakText("Не удалось остановить запись", false)
-        }
-    }
-
-    // Функция для воспроизведения записанного файла
-    private fun playRecordedFile(index: Int, trimDurationMs: Int) {
-
-        if (frequencyCtcss != 0.0) { playCTCSS(frequencyCtcss) } // Для речевых сообщений
-
-        // Проверяем, что индекс находится в допустимом диапазоне
-        if (index < 0 || index >= recordedFiles.size) {
-            speakText("Записи с таким номером нет", false)
-            return
-        }
-
-        // Получаем путь к файлу по индексу
-        val path = recordedFiles[index]
-        val file = File(path)
-
-        if (file.exists()) {
-            // Создаем AudioAttributes
-            val audioAttributes = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_MEDIA)
-                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                .build()
-
-            // Создаем AudioFormat
-            val audioFormat = AudioFormat.Builder()
-                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO) // Моно
-                .setSampleRate(44100) // Частота дискретизации
-                .setEncoding(AudioFormat.ENCODING_PCM_16BIT) // 16 бит
-                .build()
-
-            // Создаем AudioTrack для воспроизведения в режиме потока
-            val audioTrack = AudioTrack(
-                audioAttributes,
-                audioFormat,
-                AudioTrack.getMinBufferSize(44100, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT),
-                AudioTrack.MODE_STREAM,
-                AudioManager.AUDIO_SESSION_ID_GENERATE // Генерация ID сессии
-            )
-
-            // Устанавливаем громкость на 100%
-            audioTrack.setVolume(1.0f)
-
-            // Открываем поток для чтения файла
-            FileInputStream(file).use { fis ->
-                val buffer = ByteArray(1024) // Используем буфер фиксированного размера
-                val byteArrayOutputStream = ByteArrayOutputStream()
-                var bytesRead: Int
-
-                // Читаем данные из файла и записываем в ByteArrayOutputStream
-                while (fis.read(buffer).also { bytesRead = it } != -1) {
-                    byteArrayOutputStream.write(buffer, 0, bytesRead)
-                }
-
-                // Получаем массив байтов из ByteArrayOutputStream
-                val audioData = byteArrayOutputStream.toByteArray()
-
-                // Рассчитываем количество байтов для обрезки
-                val bytesPerSecond = audioFormat.sampleRate * 2 // 2 байта на сэмпл (16 бит)
-                val trimBytes = (trimDurationMs * bytesPerSecond) / 1000 // Обрезаем указанное время в миллисекундах
-
-                // Убедимся, что не обрезаем больше, чем есть в аудиофайле
-                val trimmedAudioData = if (audioData.size > trimBytes) {
-                    audioData.copyOf(audioData.size - trimBytes)
-                } else {
-                    audioData // Если обрезка больше, чем размер, просто используем оригинал
-                }
-
-                // Воспроизводим обрезанный звук
-                audioTrack.play() // Начинаем воспроизведение
-                audioTrack.write(trimmedAudioData, 0, trimmedAudioData.size)
-            }
-
-            audioTrack.stop() // Останавливаем воспроизведение после завершения
-            audioTrack.release() // Освобождаем ресурсы
-            if (frequencyCtcss != 0.0) { stopPlayback() } // Отключаем субтон
-        } else {
-            // Если файл не существует, произносим сообщение
-            speakText("Нет записанных файлов", false)
-        }
-    }
-
-    // Функция для удаления записанного файла
-    private fun deleteRecordedFile(trackIndex: Int?) {
-        if (trackIndex != null) {
-            // Удаляем конкретную запись
-            val filePath = recordedFiles[trackIndex]
-            val file = File(filePath)
-            if (file.exists() && file.delete()) {
-                speakText("Запись под номером ${trackIndex + 1} успешно удалена", false)
-                recordedFiles.removeAt(trackIndex) // Удаляем запись из списка
-            } else {
-                speakText("Не удалось удалить запись", false)
-            }
-        } else {
-            // Удаляем все записи
-            recordedFiles.forEach { path ->
-                val file = File(path)
-                if (file.exists()) {
-                    file.delete() // Удаляем файл, если он существует
-                }
-            }
-            recordedFiles.clear() // Очищаем список записанных файлов
-            speakText("Все голосовые записи успешно удалены", false)
-        }
-    }
-
     // Функция для вычисления амплитуды (нужна для теста на блокировку микрофона)
     private fun calculateAmplitude(buffer: ShortArray, readSize: Int): Double {
         var sum = 0.0
@@ -812,7 +444,7 @@ class MainRepositoryImpl(
                         ton = input.toInt()
                     }
                     if (ton in 17..97) {
-                        voxActivation(1500) { playDtmfTone(ton, 1000, 1000) }
+                        utils.voxActivation(1500) { utils.playDtmfTone(ton, 1000, 1000) }
                     } else speakText("Звуковой отклик. Установите значение от 17 до 97", false)
                 }
                 setInput("")
@@ -907,11 +539,14 @@ class MainRepositoryImpl(
                             val delayTime = if (message == "Будет выполнен вызов абонента $num") {
                                 12000
                             } else {
-                                7000
+                                8000
                             }
 
+                            // if (getSim() == 5) setSim(0) сразу звонок с той сим с которой звонили последний раз
+                            setSim(5) // Заставляем выбрать с какой сим карты выполнить вызов
                             delay(delayTime.toDuration(DurationUnit.MILLISECONDS)) // Задержка перед началом вызова
                             DtmfService.callStart(context)
+                            setInput1(getInput().toString())  // Закоментировать если надо сразу звонок с той сим с которой звонили последний раз
 
                         } else {
                             speakText("Клавиша свободна, вы можете закрепить за ней любой номер быстрого набора",false)
@@ -973,7 +608,7 @@ class MainRepositoryImpl(
 
                 // Проверка свободной памяти 9999*
                 else if (input == "9999" && getCall() == null) {
-                    val mb = getAvailableMemoryInMB()
+                    val mb = utils.getAvailableMemoryInMB()
                     val memoryMessage = if (mb > 1000) {
                         "Объем свободной памяти составляет ${mb / 1024} гигабайта" // Преобразуем в ГБ
                     } else {
@@ -1014,15 +649,48 @@ class MainRepositoryImpl(
                 // Запись голосовой заметки
                 else if (input == "7" && getCall() == null) {
                     playSoundJob.launch {
+                        val recordedFiles = getRecordedFiles()
                         val noteCount = recordedFiles.size
-                        val message = if (noteCount == 0) {
-                            "Голосовая запись номер один, можете говорить"
+
+                        if (isTorchOnIs == 111 && subscribers.size > 1) {
+                            // Формируем строку с номерами зарегистрированных абонентов
+                            val subscriberNumbers = subscribers.joinToString(", ") { "${numberToWord(it.code - '0'.code)}" }
+                            speakText("В сети находятся: ${subscriberNumbers}. абоненты. Кому из них вы хотите отправить запись?", false)
+                            setInput("")
+                            delay(14000)
+                            subscribersNumber = getInput()?.takeIf { it.isNotEmpty() }?.toIntOrNull() ?: 6
+
+                            // Массив частот и соответствующих номеров абонентов
+                            val frequencies = arrayOf(203.5, 218.1, 233.6, 250.3)
+                            val subscriberIndex = subscribersNumber - 1 // Индекс для массива
+
+                            // Проверяем, отправляем ли сообщение самому себе
+                            if (subscribersNumber in 1..4 && getFrequencyCtcss() == frequencies[subscriberIndex]) {
+                                speakText("${numberToWord(subscribersNumber)} ты отправляешь сообщение сам себе, говори", false)
+                                delay(7000)
+                                utils.startRecording(subscribersNumber)
+                                setInput("")
+                            }
+                            // Проверяем, существует ли введенный номер в списке абонентов
+                            else if (subscribers.contains((subscribersNumber + '0'.code).toChar())) {
+                                speakText("Сообщение получит ${numberToWord(subscribersNumber)} абонент, можете говорить", false)
+                                delay(7000)
+                                utils.startRecording(subscribersNumber)
+                                setInput("")
+                            } else {
+                                speakText("${numberToWord(subscribersNumber)} не доступен. Доступны только: $subscriberNumbers", false)
+                                setInput("")
+                            }
                         } else {
-                            "Голосовая запись номер ${noteCount + 1}, можете говорить"
+                            val message = if (noteCount == 0) {
+                                "Голосовая запись номер один, можете говорить"
+                            } else {
+                                "Голосовая запись номер ${noteCount + 1}, можете говорить"
+                            }
+                            speakText(message, false)
+                            delay(6000)
+                            utils.startRecording(subscribersNumber)
                         }
-                        speakText(message, false)
-                        delay(6000)
-                        startRecording()
                     }
                     setInput("")
                 }
@@ -1030,8 +698,8 @@ class MainRepositoryImpl(
                 // Удаление голосовой заметки
                 else if (input == "8" && getCall() == null) {
                     playSoundJob.launch {
+                        val recordedFiles = getRecordedFiles()
                         val noteCount = recordedFiles.size
-                        Log.e("DeleteRecordedFile", "Значение $noteCount")
                         if (noteCount == 0) {
                             speakText("Нет данных для удаления", false)
                             setInput("")
@@ -1041,10 +709,10 @@ class MainRepositoryImpl(
                             delay(18000)
                             val userInput1 = getInput()?.toLongOrNull()
                             if (userInput1 != null && userInput1 == 381L) {
-                                deleteRecordedFile(null) // Удаляем все записи
+                                utils.deleteRecordedFile(null) // Удаляем все записи
                                 setInput("")
                             } else if (userInput1 != null && userInput1 in 1..noteCount) {
-                                deleteRecordedFile(userInput1.toInt() - 1) // Удаляем конкретную запись
+                                utils.deleteRecordedFile(userInput1.toInt() - 1) // Удаляем конкретную запись
                                 setInput("")
                             } else {
                                 speakText("Удаление отменено", false)
@@ -1057,6 +725,7 @@ class MainRepositoryImpl(
                 // Воспроизведение голосовой заметки
                 else if (input == "9" && getCall() == null) {
                     playSoundJob.launch {
+                        val recordedFiles = getRecordedFiles()
                         val noteCount = recordedFiles.size
                         if (noteCount == 0) {
                             speakText("Голосовые записи отсутствуют", false)
@@ -1064,18 +733,22 @@ class MainRepositoryImpl(
                         } else if (noteCount == 1) {
                             setInput("")
                             delay(1500)
-                            playRecordedFile(0, 1000) // Обрезаем последнюю секунду
+                            utils.playRecordedFile(0, 1000)
+                        } else if (isTorchOnIs == 111 && subscribersNumber != 0) {
+                            setInput("")
+                            delay(1500)
+                            utils.playRecordedFile(noteCount - 1, 1000)
                         } else {
                             val noteCountText = if (noteCount == 2) "две" else noteCount.toString()
                             speakText("Какую запись требуется воспроизвести? Всего их $noteCountText", false)
                             setInput("")
-                            delay(10000)
+                            delay(12000)
                             val userInput = getInput()?.toLongOrNull()
                             if (userInput != null && userInput in 1..noteCount) {
-                                playRecordedFile(userInput.toInt() - 1, 1000)
+                                utils.playRecordedFile(userInput.toInt() - 1, 1000)
                             } else {
                                 if (userInput == null) {
-                                    playRecordedFile(noteCount - 1, 1000)
+                                    utils.playRecordedFile(noteCount - 1, 1000)
                                 } else {
                                     speakText("Неверный номер записи", false)
                                 }
@@ -1119,7 +792,7 @@ class MainRepositoryImpl(
                             } else speakText("Ожидается значение от 0 до 4000 милисекунд", false)
 
                             delay(10000)
-                            playDtmfTones(periodVox - 100, durationVox)
+                            utils.playDtmfTones(periodVox - 100, durationVox)
                             setInput("")
                         }
                     } else  {
@@ -1131,7 +804,7 @@ class MainRepositoryImpl(
                 // Настройка VOX Верхний порог
                 else if (input == "33") {
                     if (getCall() == null && block) {
-                        playDtmfTones(periodVox + 100, durationVox)
+                        utils.playDtmfTones(periodVox + 100, durationVox)
                         setInput("")
                     } else  {
                         speakText("Команда заблокирована", false)
@@ -1156,7 +829,7 @@ class MainRepositoryImpl(
                                 flagVox = false
                             } else {
                                 delay(5000)
-                                playDtmfTone(0, 1000, durationVox)
+                                utils.playDtmfTone(0, 1000, durationVox)
                                 delay(4000)
                                 setInput("")
                                 flagVox = false
@@ -1188,8 +861,8 @@ class MainRepositoryImpl(
                                 val inputValue = userInput?.toLongOrNull() ?: 1230
                                 val formattedValue = String.format("%.1f", inputValue / 10.0)
                                 val finalValue = formattedValue.replace(',', '.')
-                                frequencyCtcss = finalValue.toDouble()
-                                speakText("Частота субтона репитера установлена на ${formatVolumeLevel(frequencyCtcss)} герца. Громкость ${formatVolumeLevel(volumeLevelCtcss * 1000)} процентов", false)
+                                setFrequencyCtcss(finalValue.toDouble())
+                                speakText("Частота субтона репитера установлена на ${formatVolumeLevel(getFrequencyCtcss())} герца. Громкость ${formatVolumeLevel(getVolumeLevelCtcss() * 1000)} процентов", false)
                                 setInput("")
                             }
                         }
@@ -1202,15 +875,22 @@ class MainRepositoryImpl(
                 // Проигрывание DTMF тонов от 0 до 9 для проверки гальванической развязки
                 else if (input == "55") {
                     if (getCall() == null && block) {
-                        voxActivation(1500) { playDtmfTones(300, 300) }
-                        setInput("")
+                        playSoundJob.launch {
+                            utils.voxActivation(1500, voxActivation) { utils.playDtmfTones(600, 300) }
+                            setInput("")
+                            delay(12000)
+                            if (getInput() == "") speakText("Гальваническая связь полностью отсутствует. Отличный показатель для неселективного вызова", false)
+                            if (getInput() == "0123456789") speakText("Гальваническая связь присутсвует, все тона восприняты без ошибок", false)
+                            if (getInput() != "" && getInput() != "0123456789") { speakText("Гальваническая связь присутствует, тона прошли с ошибками", false) }
+                            setInput("")
+                        }
                     } else  {
                         speakText("Команда заблокирована", false)
                         setInput("")
                     }
                 }
 
-                // Установка времени тона активации для устранения проглатывания начальных слов всех речевых сообщений
+                // Установка громкости субтона
                 else if (input == "66") {
                     if (getCall() == null && block) {
                         setInput("")
@@ -1221,9 +901,9 @@ class MainRepositoryImpl(
                             val volumeInputValue = volumeCtcsInput?.toIntOrNull()
 
                             if (volumeInputValue != null && volumeInputValue in 0..1000) {
-                                volumeLevelCtcss = (volumeInputValue / 1000.0) // Преобразуем значение от 0-1000 в диапазон от 0.01 до 1
+                                setVolumeLevelCtcss(volumeInputValue / 1000.0) // Преобразуем значение от 0-1000 в диапазон от 0.01 до 1
                                 speakText(
-                                    "Громкость субтона установлена на ${volumeInputValue} процентов. его частота ${formatVolumeLevel(frequencyCtcss)} герц",
+                                    "Громкость субтона установлена на ${volumeInputValue} процентов. его частота ${formatVolumeLevel(getFrequencyCtcss())} герц",
                                     false
                                 )
                             } else {
@@ -1487,9 +1167,10 @@ class MainRepositoryImpl(
                     // Команда отключения генерации тонов CTCSS
                     else if (input == "58") {
                         if (getCall() == null && block) {
-                            frequencyCtcss = 0.0
+                            setFrequencyCtcss(0.0)
                             speakText("Внимание! Открытый канал, Все субтона репитера отключены", false)
-                            stopPlayback()
+                            utils.stopPlayback()
+                            subscribers.clear() // Очищаем счетчик количества абонентов
                             setInput("")
                         } else  {
                         speakText("Команда заблокирована", false)
@@ -1553,8 +1234,8 @@ class MainRepositoryImpl(
                     }
 
                     else if (!isSpeaking) {
-                        if (isRecording) {
-                            stopRecording()
+                        if (getIsRecording()) {
+                            utils.stopRecording(subscribersNumber, isTorchOnIs, subscribers)
                         } else speakText("Номеронабиратель, очищен", false)
                     }
                 } else {
@@ -1579,26 +1260,33 @@ class MainRepositoryImpl(
                         if (isTorchOnIs == 111) {
                             when (key) {
                                 'R' -> {
-                                    frequencyCtcss = 203.5 // Субтон для первой радиостанции
-                                    speakText("Первая радиостанция вы зарегистрированы. Ваш рабочий субтон ${formatVolumeLevel(frequencyCtcss)} герца", false)
+                                        subscribers.add('1') // Добавляем абонента, если его еще нет
+                                        setFrequencyCtcss(203.5) // Субтон для первой радиостанции
+                                        speakText("Первый абонент, репитер работает на вас", false)
+
                                 }
                                 'S' -> {
-                                    frequencyCtcss = 218.1 // Субтон для второй радиостанции
-                                    speakText("Вторая радиостанция вы зарегистрированы. Ваш рабочий субтон ${formatVolumeLevel(frequencyCtcss)} герца", false)
+                                        subscribers.add('2') // Добавляем абонента, если его еще нет
+                                        setFrequencyCtcss(218.1) // Субтон для второй радиостанции
+                                        speakText("Второй абонент, репитер работает на вас", false)
                                 }
                                 'T' -> {
-                                    frequencyCtcss = 233.6 // Субтон для третьей радиостанции
-                                    speakText("Третья радиостанция вы зарегистрированы. Ваш рабочий субтон ${formatVolumeLevel(frequencyCtcss)} герца", false)
+                                        subscribers.add('3')// Добавляем абонента, если его еще нет
+                                        setFrequencyCtcss(233.6) // Субтон для третьей радиостанции
+                                        speakText("Третий абонент, репитер работает на вас", false)
                                 }
                                 'V' -> {
-                                    frequencyCtcss = 250.3 // Субтон для четвертой радиостанции
-                                    speakText("Четвертая радиостанция вы зарегистрированы. Ваш рабочий субтон ${formatVolumeLevel(frequencyCtcss)} герца", false)
+                                        subscribers.add('4') // Добавляем абонента, если его еще нет
+                                        setFrequencyCtcss(250.3) // Субтон для четвертой радиостанции
+                                        speakText("Четвертый абонент, репитер работает на вас", false)
                                 }
                             }
                         }
 
                         if (isTorchOnIs == 0) {
-                           frequencyCtcss = 0.0
+                           setFrequencyCtcss(0.0)
+                           subscribersNumber = 0
+                           subscribers.clear()
                            speakText("Селективный вызов и звуковой отклик отключены", false)
                         }
                     }
@@ -1666,12 +1354,7 @@ class MainRepositoryImpl(
 
     override fun speakText(text: String, flagVoise: Boolean) {
 
-        Log.d("Контрольный лог", "ЗНАЧЕНИЕ frequencyCtcss: $frequencyCtcss ЗНАЧЕНИЕ volumeLevelCtcss: $volumeLevelCtcss")
-
-        if (frequencyCtcss != 0.0) {
-            playCTCSS(frequencyCtcss)
-            Log.d("Контрольный лог", "УСЛОВИЕ  ВНУТРИ ТТС СРАБОТАЛО")
-        } // Для речевых сообщений } // Воспроизводим соответствующий CTCSS (если значение = 0.0 то тон не воспроизводится)
+        if (getFrequencyCtcss() != 0.0) { utils.playCTCSS(getFrequencyCtcss(), getVolumeLevelCtcss()) } // Воспроизводим соответствующий CTCSS (если значение = 0.0 то тон не воспроизводится)
 
         if (isSpeaking) { return }
 
@@ -1690,22 +1373,35 @@ class MainRepositoryImpl(
                     textToSpeech.setOnUtteranceProgressListener(null)
                     textToSpeech.stop()
                     textToSpeech.shutdown()
-                    if (frequencyCtcss != 0.0) { stopPlayback() }
+                    utils.stopPlayback()
                 }
 
-                override fun onError(utteranceId: String?) {}
+                override fun onError(utteranceId: String?) {
+                    utils.stopPlayback()
+                }
             })
 
             val utteranceId = System.currentTimeMillis().toString()
 
             CoroutineScope(Dispatchers.Main).launch {
                 if (text != "Один. Два. Три. Четыре. Пять. Поверка работоспособности вокс системы. Шесть. Семь. Восемь. Девять. Десять") {
-                    voxActivation(1500) { textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId) }
+                    utils.voxActivation(1500, voxActivation) { textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId) }
                 } else {
                     delay(1500)
                     textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
                 }
             }
+        }
+    }
+
+    // Функция для преобразования номера в слово
+    private fun numberToWord(number: Int): String {
+        return when (number) {
+            1 -> "Первый"
+            2 -> "Второй"
+            3 -> "Третий"
+            4 -> "Четвертый"
+            else -> "Система может поддерживать только четыре абонента, этот номер" // На случай, если номер не в диапазоне
         }
     }
 }

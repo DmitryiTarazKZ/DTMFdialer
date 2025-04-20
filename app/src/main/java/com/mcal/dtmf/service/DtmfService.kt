@@ -15,6 +15,7 @@ import android.os.Looper
 import android.telecom.TelecomManager
 import android.telecom.VideoProfile
 import android.telephony.SubscriptionManager
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.mcal.dtmf.R
@@ -41,6 +42,7 @@ class DtmfService : Service(), KoinComponent {
     }
 
     private fun startCall() {
+        Log.e("Контрольный лог", "startCall() вызвана")
         var slot1 = ""
         var slot2 = ""
 
@@ -88,7 +90,7 @@ class DtmfService : Service(), KoinComponent {
             mainRepository.setInput("")
         } else {
             if (phoneAccountCount > 1 && (slot1 != "Нет сигнала" && slot2 != "Нет сигнала")) {
-                mainRepository.speakText("Выберите с какой сим карты выполнить вызов", false)
+                if (mainRepository.getSim() == 5) { mainRepository.speakText("Выберите с какой сим карты выполнить вызов", false) }
                 if (mainRepository.getSim() == 0 || mainRepository.getSim() == 1) {
                     mainRepository.speakText("Звоню с  ${if (mainRepository.getSim() == 0) slot1 else slot2}", false)
                     Handler(Looper.getMainLooper()).postDelayed({

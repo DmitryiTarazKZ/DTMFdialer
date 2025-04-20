@@ -2,44 +2,68 @@ package com.mcal.dtmf.utils
 
 import android.Manifest
 import android.app.Activity
+import android.app.Application
 import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioManager
+import android.media.AudioRecord
+import android.media.AudioTrack
+import android.media.MediaRecorder
+import android.media.ToneGenerator
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.Bundle
+import android.os.StatFs
 import android.provider.CallLog
 import android.provider.ContactsContract
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.telephony.SmsManager
+import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.mcal.dtmf.data.repositories.main.MainRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.Timer
 import java.util.TimerTask
+import kotlin.math.PI
 import kotlin.math.roundToInt
+import kotlin.math.sin
+import kotlin.math.sqrt
+import kotlin.math.tan
 
 class Utils(
     private val mainRepository: MainRepository,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    private val context: Application
 ) {
     private var lastMissedCallNumber: String? = null
     private var lastMissedCallTime: String? = null
     private val REQUEST_CODE_CONTACTS_PERMISSION = 1
+    private var audioTrack: AudioTrack? = null
+    private var isPlaying = false
+    private var availableMB = 0L
+    private var audioRecord1: AudioRecord? = null
+    private var recordedFilePath: String? = null
 
     companion object {
 
@@ -752,5 +776,487 @@ class Utils(
             }.joinToString("")
         }
         return convertedWords.joinToString(" ")
+    }
+
+    // Контрольные тона для отладки VOX а также проверки гальванической развязки
+    fun playDtmfTones(period: Long, duration: Long) {
+        scope.launch {
+            val dtmfDigits = listOf(
+                ToneGenerator.TONE_DTMF_0,
+                ToneGenerator.TONE_DTMF_1,
+                ToneGenerator.TONE_DTMF_2,
+                ToneGenerator.TONE_DTMF_3,
+                ToneGenerator.TONE_DTMF_4,
+                ToneGenerator.TONE_DTMF_5,
+                ToneGenerator.TONE_DTMF_6,
+                ToneGenerator.TONE_DTMF_7,
+                ToneGenerator.TONE_DTMF_8,
+                ToneGenerator.TONE_DTMF_9
+            )
+
+            for (i in dtmfDigits.indices) {
+                delay(period) // период проигрывания
+                playDtmfTone(dtmfDigits[i], period, duration)
+            }
+        }
+    }
+
+    fun playDtmfTone(tone: Int, period: Long, duration: Long) {
+        val toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 100) // 100 - громкость
+        scope.launch {
+            toneGenerator.startTone(tone, duration.toInt()) // Длительность тона
+            delay(period) // период проигрывания
+            toneGenerator.release()
+        }
+    }
+
+    // Функция предварительного тона активирующего VOX при всех речевых сообщениях
+     fun voxActivation(delayMillis: Long = 2000, voxActivation: Long = 500, onComplete: suspend () -> Unit) {
+        val sampleRate = 44100 // Частота дискретизации
+        val frequency = 800.0 // Частота звука (не допустимо выбирать частоту активации кратной или равной тонам определения)
+        val duration = voxActivation // Длительность звука в миллисекундах
+        val bufferSize = (sampleRate * duration / 1000).toInt() // Размер буфера
+
+         scope.launch {
+                delay(delayMillis)
+
+                // Создание звука
+                val buffer = ShortArray(bufferSize)
+                val angleIncrement = 2.0 * Math.PI * frequency / sampleRate
+                var angle = 0.0
+
+                for (i in buffer.indices) {
+                    buffer[i] = (Short.MAX_VALUE * sin(angle)).toInt().toShort()
+                    angle += angleIncrement
+                    if (angle >= 2 * Math.PI) angle -= 2 * Math.PI
+                }
+
+                // Воспроизведение звука
+                val audioTrack = AudioTrack.Builder()
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .build()
+                    )
+                    .setAudioFormat(
+                        AudioFormat.Builder()
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .setSampleRate(sampleRate)
+                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                            .build()
+                    )
+                    .setBufferSizeInBytes(AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT))
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                    .build()
+
+                audioTrack.play()
+                audioTrack.write(buffer, 0, buffer.size)
+                audioTrack.stop()
+                audioTrack.release()
+
+                onComplete()
+        }
+    }
+
+    // Генерация субтонов CTCSS для системы непрерывного тонального шумоподавления
+    fun playCTCSS(frequency: Double, volumeLevelCtcss: Double) {
+        val sampleRate = 44100 // Частота дискретизации
+        val lowCutoffFrequency = frequency * 0.8 // Нижняя частота среза полосового фильтра (например, 80% от частоты)
+        val highCutoffFrequency = frequency * 1.2 // Верхняя частота среза полосового фильтра (например, 120% от частоты)
+        val order = 2 // Порядок фильтра
+
+        // Инициализация AudioTrack
+        if (audioTrack == null) {
+            audioTrack = AudioTrack.Builder()
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(sampleRate)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                        .build()
+                )
+                .setBufferSizeInBytes(AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT))
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .build()
+        }
+
+        // Проверка состояния AudioTrack
+        if (audioTrack?.state != AudioTrack.STATE_INITIALIZED) {
+            Log.e("AudioTrack", "AudioTrack не инициализирован")
+            return
+        }
+
+        if (!isPlaying) {
+            audioTrack?.play()
+            isPlaying = true
+
+            val bufferSize = sampleRate / 2 // Увеличиваем размер буфера для более плавного сигнала
+            val buffer = FloatArray(bufferSize) // Используем FloatArray для большей точности
+            val angleIncrement = 2.0 * Math.PI * frequency / sampleRate
+            var angle = 0.0
+
+            // Параметры фильтра Баттерворта
+            val a = DoubleArray(order + 1) // Коэффициенты фильтра
+            val b = DoubleArray(order + 1) // Коэффициенты фильтра
+            val x = DoubleArray(order + 1) // Входные значения
+            val y = DoubleArray(order + 1) // Выходные значения
+            val yHigh = DoubleArray(order + 1) // Выходные значения для верхнего фильтра
+
+            // Расчет коэффициентов фильтра Баттерворта для полосового фильтра
+            val nyquist = sampleRate / 2.0
+            val normalizedLowCutoff = lowCutoffFrequency / nyquist
+            val normalizedHighCutoff = highCutoffFrequency / nyquist
+
+            // Расчет коэффициентов для нижнего фильтра
+            val wcLow = tan(PI * normalizedLowCutoff)
+            val kLow = 1.0 / (1.0 + sqrt(2.0) * wcLow + wcLow * wcLow)
+            b[0] = kLow
+            b[1] = 2 * b[0]
+            b[2] = b[0]
+            a[1] = 2 * (1 - wcLow * wcLow) * kLow
+            a[2] = (1 - sqrt(2.0) * wcLow + wcLow * wcLow) * kLow
+
+            // Расчет коэффициентов для верхнего фильтра
+            val wcHigh = tan(PI * normalizedHighCutoff)
+            val kHigh = 1.0 / (1.0 + sqrt(2.0) * wcHigh + wcHigh * wcHigh)
+            val bHigh = DoubleArray(order + 1)
+            val aHigh = DoubleArray(order + 1)
+            bHigh[0] = kHigh
+            bHigh[1] = 2 * bHigh[0]
+            bHigh[2] = bHigh[0]
+            aHigh[1] = 2 * (1 - wcHigh * wcHigh) * kHigh
+            aHigh[2] = (1 - sqrt(2.0) * wcHigh + wcHigh * wcHigh) * kHigh
+
+            scope.launch {
+                while (isPlaying) {
+                    for (i in 0 until bufferSize) {
+                        val rawValue = volumeLevelCtcss * sin(angle) // Генерация синусоиды
+
+                        // Применение нижнего фильтра Баттерворта
+                        x[0] = rawValue
+                        y[0] = b[0] * x[0] + b[1] * x[1] + b[2] * x[2] - a[1] * y[1] - a[2] * y[2]
+                        // Сдвиг значений
+                        for (j in order downTo 1) {
+                            x[j] = x[j - 1]
+                            y[j] = y[j - 1]
+                        }
+
+                        // Применение верхнего фильтра Баттерворта
+                        val filteredValue = y[0]
+                        x[0] = filteredValue
+                        yHigh[0] = bHigh[0] * x[0] + bHigh[1] * x[1] + bHigh[2] * x[2] - aHigh[1] * yHigh[1] - aHigh[2] * yHigh[2]
+                        // Сдвиг значений для верхнего фильтра
+                        for (j in order downTo 1) {
+                            x[j] = x[j - 1]
+                            yHigh[j] = yHigh[j - 1]
+                        }
+
+                        buffer[i] = yHigh[0].toFloat() // Запись отфильтрованного значения
+                        angle += angleIncrement
+                        if (angle >= 2 * Math.PI) angle -= 2 * Math.PI
+                    }
+
+                    // Преобразование FloatArray в ByteArray
+                    val byteBuffer = ByteArray(bufferSize * 2)
+                    for (i in buffer.indices) {
+                        val value = (buffer[i] * 32767).toInt() // Преобразование в 16-битный формат
+                        // Ограничиваем значения, чтобы избежать клиппинга
+                        val clampedValue = value.coerceIn(-32768, 32767)
+                        byteBuffer[2 * i] = (clampedValue and 0xFF).toByte()
+                        byteBuffer[2 * i + 1] = (clampedValue shr 8 and 0xFF).toByte()
+                    }
+
+                    // Запись в AudioTrack с обработкой ошибок
+                    val result = audioTrack?.write(byteBuffer, 0, byteBuffer.size)
+                    if (result == AudioTrack.ERROR_INVALID_OPERATION) {
+                        Log.e("AudioTrack", "Ошибка записи: INVALID_OPERATION")
+                        break
+                    } else if (result == AudioTrack.ERROR) {
+                        Log.e("AudioTrack", "Ошибка записи: ERROR")
+                        break
+                    }
+                }
+            }
+        }
+    }
+
+    fun stopPlayback() {
+        if (isPlaying) {
+            isPlaying = false
+            audioTrack?.stop()
+            // audioTrack?.release() // Не освобождайте, если хотите использовать его повторно
+            // audioTrack = null // Не обнуляйте, если хотите использовать его повторно
+        }
+    }
+
+    fun startRecording(subscribersNumber: Int) {
+        if (ActivityCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            return
+        }
+        availableMB = getAvailableMemoryInMB()
+        if (availableMB < 5) {
+            mainRepository.speakText("В памяти нет места для записи, осталось всего 5 мегабайт. Освободите память", false)
+            return
+        }
+        val sampleRate = 44100
+        val channelConfig = AudioFormat.CHANNEL_IN_MONO
+        val audioFormat = AudioFormat.ENCODING_PCM_16BIT
+        val bufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
+        if (bufferSize <= 0) {
+            return
+        }
+        val fileName = "voice_note_${subscribersNumber}_${System.currentTimeMillis()}.pcm" // Сохраняем в формате PCM
+        recordedFilePath = File(context.getExternalFilesDir(null), fileName).absolutePath // Устанавливаем путь к файлу
+        audioRecord1 = AudioRecord(
+            MediaRecorder.AudioSource.MIC,
+            sampleRate,
+            channelConfig,
+            audioFormat,
+            bufferSize
+        )
+        if (audioRecord1?.state != AudioRecord.STATE_INITIALIZED) {
+            return
+        }
+        audioRecord1?.startRecording()
+        mainRepository.setIsRecording(true)
+        val buffer = ShortArray(bufferSize)
+        FileOutputStream(recordedFilePath).use { fos ->
+            while (mainRepository.getIsRecording() == true) {
+                val readSize = audioRecord1?.read(buffer, 0, buffer.size) ?: 0
+                if (readSize > 0) {
+                    val byteBuffer = ByteArray(readSize * 2)
+                    for (i in 0 until readSize) {
+                        val amplifiedSample = (buffer[i] * 4).coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                        byteBuffer[i * 2] = (amplifiedSample and 0xFF).toByte()
+                        byteBuffer[i * 2 + 1] = (amplifiedSample shr 8 and 0xFF).toByte()
+                    }
+                    fos.write(byteBuffer)
+                } else {
+                    // speakText("Ошибка чтения с буфера", false)
+                }
+            }
+        }
+        audioRecord1?.stop()
+        audioRecord1?.release()
+        audioRecord1 = null
+        mainRepository.setRecordedFiles(listOf(recordedFilePath!!))
+    }
+
+    // Функция для получения доступной памяти в мегабайтах
+    fun getAvailableMemoryInMB(): Long {
+        val storageStat = StatFs(context.getExternalFilesDir(null)?.absolutePath)
+        val availableBytes = storageStat.availableBlocksLong * storageStat.blockSizeLong
+        return availableBytes / (1024 * 1024) // Преобразуем байты в мегабайты
+    }
+
+    // Функция для остановки записи
+    fun stopRecording(subscribersNumber: Int, isTorchOnIs: Int, subscribers: Set<Char>) {
+        scope.launch {
+            try {
+                if (mainRepository.getIsRecording() == true) {
+                    audioRecord1?.stop() // Останавливаем запись
+                    audioRecord1?.release() // Освобождаем ресурсы
+                    audioRecord1 = null // Сбрасываем ссылку
+                    mainRepository.setIsRecording(false) // Устанавливаем флаг записи в false
+
+                    if (isTorchOnIs == 111  && subscribers.size > 1) {
+                        val message = if (availableMB < 100) {
+                            "Запись отправлена абоненту с номером $subscribersNumber. Заканчивается память, осталось $availableMB мегабайт"
+                        } else {
+                            "Запись отправлена абоненту с номером $subscribersNumber"
+                        }
+                        mainRepository.speakText(message, false)
+                    } else {
+                        val message = if (availableMB < 100) {
+                            "Запись сохранена. Заканчивается память, осталось $availableMB мегабайт"
+                        } else {
+                            "Запись сохранена."
+                        }
+                        mainRepository.speakText(message, false)
+                    }
+
+                    delay(10000)
+                    if (subscribersNumber == 1) {
+                        mainRepository.setFrequencyCtcss(203.5)
+                        mainRepository.speakText("Первый абонент вам поступила голосовая запись", false)
+                    }
+                    if (subscribersNumber == 2) {
+                        mainRepository.setFrequencyCtcss(218.1)
+                        mainRepository.speakText("Второй абонент вам поступила голосовая запись", false)
+                    }
+                    if (subscribersNumber == 3) {
+                        mainRepository.setFrequencyCtcss(233.6)
+                        mainRepository.speakText("Третий абонент вам поступила голосовая запись", false)
+                    }
+                    if (subscribersNumber == 4) {
+                        mainRepository.setFrequencyCtcss(250.3)
+                        mainRepository.speakText("Четвертый абонент вам поступила голосовая запись", false)
+                    }
+                }
+            } catch (e: IllegalStateException) {
+                mainRepository.speakText("Не удалось остановить запись", false)
+            }
+        }
+    }
+
+    // Функция для воспроизведения записанного файла
+    fun playRecordedFile(index: Int, trimDurationMs: Int) {
+        Log.e("Контрольный лог", "ЗНАЧЕНИЕ index: $index ЗНАЧЕНИЕ trimDurationMs: $trimDurationMs")
+        val recordedFiles = mainRepository.getRecordedFiles() // Получаем список записанных файлов
+
+        if (mainRepository.getFrequencyCtcss() != 0.0) {
+            playCTCSS(mainRepository.getFrequencyCtcss(), mainRepository.getVolumeLevelCtcss())
+        }
+
+        // Проверяем, что индекс находится в допустимом диапазоне
+        if (index < 0 || index >= recordedFiles.size) {
+            mainRepository.speakText("Записи с таким номером нет", false)
+            return
+        }
+
+        // Определяем путь к файлу
+        val path: String
+        val currentFrequency = mainRepository.getFrequencyCtcss()
+
+        if (currentFrequency == 0.0) {
+            // Если частота равна 0.0, используем файл по индексу
+            path = recordedFiles[index]
+        } else {
+            // Ищем файл с соответствующим номером абонента по частоте
+            val matchingFiles = when (currentFrequency) {
+                203.5 -> recordedFiles.filter { it.contains("voice_note_1") }
+                218.1 -> recordedFiles.filter { it.contains("voice_note_2") }
+                233.6 -> recordedFiles.filter { it.contains("voice_note_3") }
+                250.3 -> recordedFiles.filter { it.contains("voice_note_4") }
+                else -> emptyList()
+            }
+
+            if (matchingFiles.isNotEmpty()) {
+                // Если есть файлы, адресованные абоненту, берем последний
+                path = matchingFiles.last()
+            } else {
+                // Определяем номер абонента по частоте
+                val subscriberNumber = when (currentFrequency) {
+                    203.5 -> 1
+                    218.1 -> 2
+                    233.6 -> 3
+                    250.3 -> 4
+                    else -> null
+                }
+
+                if (subscriberNumber != null) {
+                    mainRepository.speakText("Абонент номер $subscriberNumber, у вас нет входящих сообщений", false)
+                } else {
+                    mainRepository.speakText("Нет записанных файлов для данной частоты", false)
+                }
+                return
+            }
+        }
+
+        val file = File(path)
+
+        if (file.exists()) {
+
+            // Создаем AudioAttributes
+            val audioAttributes = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                .build()
+
+            // Создаем AudioFormat
+            val audioFormat = AudioFormat.Builder()
+                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO) // Моно
+                .setSampleRate(44100) // Частота дискретизации
+                .setEncoding(AudioFormat.ENCODING_PCM_16BIT) // 16 бит
+                .build()
+
+            // Создаем AudioTrack для воспроизведения в режиме потока
+            val audioTrack = AudioTrack(
+                audioAttributes,
+                audioFormat,
+                AudioTrack.getMinBufferSize(44100, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT),
+                AudioTrack.MODE_STREAM,
+                AudioManager.AUDIO_SESSION_ID_GENERATE // Генерация ID сессии
+            )
+
+            // Устанавливаем громкость на 100%
+            audioTrack.setVolume(1.0f)
+
+            // Открываем поток для чтения файла
+            FileInputStream(file).use { fis ->
+                val buffer = ByteArray(1024) // Используем буфер фиксированного размера
+                val byteArrayOutputStream = ByteArrayOutputStream()
+                var bytesRead: Int
+
+                // Читаем данные из файла и записываем в ByteArrayOutputStream
+                while (fis.read(buffer).also { bytesRead = it } != -1) {
+                    byteArrayOutputStream.write(buffer, 0, bytesRead)
+                }
+
+                // Получаем массив байтов из ByteArrayOutputStream
+                val audioData = byteArrayOutputStream.toByteArray()
+
+                // Рассчитываем количество байтов для обрезки
+                val bytesPerSecond = audioFormat.sampleRate * 2 // 2 байта на сэмпл (16 бит)
+                val trimBytes = (trimDurationMs * bytesPerSecond) / 1000 // Обрезаем указанное время в миллисекундах
+
+                // Убедимся, что не обрезаем больше, чем есть в аудиофайле
+                val trimmedAudioData = if (audioData.size > trimBytes) {
+                    audioData.copyOf(audioData.size - trimBytes)
+                } else {
+                    audioData // Если обрезка больше, чем размер, просто используем оригинал
+                }
+
+                // Воспроизводим обрезанный звук
+                audioTrack.play() // Начинаем воспроизведение
+                audioTrack.write(trimmedAudioData, 0, trimmedAudioData.size)
+            }
+
+            audioTrack.stop() // Останавливаем воспроизведение после завершения
+            audioTrack.release() // Освобождаем ресурсы
+            if (mainRepository.getFrequencyCtcss() != 0.0) {
+                stopPlayback() // Отключаем субтон
+            }
+        } else {
+            mainRepository.speakText("Нет записанных файлов", false)
+        }
+    }
+
+    // Функция для удаления записанного файла
+    fun deleteRecordedFile(trackIndex: Int?) {
+        val recordedFiles = mainRepository.getRecordedFiles()
+        if (trackIndex != null) {
+            // Удаляем конкретную запись
+            val filePath = recordedFiles.getOrNull(trackIndex)
+            if (filePath != null) {
+                val file = File(filePath)
+                if (file.exists() && file.delete()) {
+                    mainRepository.speakText("Запись под номером ${trackIndex + 1} успешно удалена", false)
+                    mainRepository.clearRecordedFiles()
+                    val updatedFiles = recordedFiles.filterIndexed { index, _ -> index != trackIndex }
+                    mainRepository.setRecordedFiles(updatedFiles) // Обновляем список в репозитории
+                } else {
+                    mainRepository.speakText("Не удалось удалить запись", false)
+                }
+            } else {
+                mainRepository.speakText("Запись не найдена", false)
+            }
+        } else {
+            recordedFiles.forEach { path ->
+                val file = File(path)
+                if (file.exists()) {
+                    file.delete()
+                }
+            }
+            mainRepository.clearRecordedFiles()
+            mainRepository.speakText("Все голосовые записи успешно удалены", false)
+        }
     }
 }

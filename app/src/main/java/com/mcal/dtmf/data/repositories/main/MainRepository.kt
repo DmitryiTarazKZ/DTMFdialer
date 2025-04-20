@@ -12,6 +12,19 @@ interface MainRepository {
     fun getCall(): Call?
     fun setCall(call: Call?)
 
+    fun getFrequencyCtcssFlow(): Flow<Double>
+    fun getFrequencyCtcss(): Double
+    fun setFrequencyCtcss(frequencyCtcss: Double)
+
+    fun getVolumeLevelCtcssFlow(): Flow<Double>
+    fun getVolumeLevelCtcss(): Double
+    fun setVolumeLevelCtcss(volumeLevelCtcss: Double)
+
+    fun getRecordedFilesFlow(): Flow<String>
+    fun getRecordedFiles(): List<String>
+    fun setRecordedFiles(recordedFiles: List<String>)
+    fun clearRecordedFiles()
+
     fun getCallStateFlow(): Flow<Int>
     fun getCallState(): Int
     fun setCallState(callState: Int)
@@ -31,6 +44,10 @@ interface MainRepository {
     fun getPowerFlow(): Flow<Boolean>
     fun getPower(): Boolean?
     fun setPower(value: Boolean)
+
+    fun getIsRecordingFlow(): Flow<Boolean>
+    fun getIsRecording(): Boolean?
+    fun setIsRecording(value: Boolean)
 
     fun getAmplitudeCheckFlow(): Flow<Boolean>
     fun getAmplitudeCheck(): Boolean?
