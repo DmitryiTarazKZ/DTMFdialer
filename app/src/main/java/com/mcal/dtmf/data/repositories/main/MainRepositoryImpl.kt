@@ -11,7 +11,6 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.net.Uri
-import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import android.speech.tts.TextToSpeech
@@ -120,14 +119,12 @@ class MainRepositoryImpl(
             context.startActivity(intent)
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            if (!powerManager.isIgnoringBatteryOptimizations(context.packageName)) { // Проверка на оптимизацию
-                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                    data = Uri.parse("package:${context.packageName}")
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                }
-                context.startActivity(intent)
+        if (!powerManager.isIgnoringBatteryOptimizations(context.packageName)) { // Проверка на оптимизацию
+            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = Uri.parse("package:${context.packageName}")
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
             }
+            context.startActivity(intent)
         }
 
         // Устанавливаем громкость для каждого потока отдельно
@@ -587,7 +584,7 @@ class MainRepositoryImpl(
                     setInput("")
                 }
 
-                // Очистка номеров быстрого набора по команде 4*
+                // Очистка номеров быстрого набора по команде 3*
                 else if (input == "3" && getCall() == null) {
                     textToSpeech.setOnUtteranceProgressListener(null)
                     numberA = ""
@@ -602,7 +599,7 @@ class MainRepositoryImpl(
                 // Удаленная проверка последнего СМС по команде 4*
                 else if (input == "4" && getCall() == null) {
                     val smsText =  utils.getLastIncomingSms(context)
-                    speakText("$smsText",false)
+                    speakText(smsText, false)
                     setInput("")
                 }
 
@@ -654,7 +651,7 @@ class MainRepositoryImpl(
 
                         if (isTorchOnIs == 111 && subscribers.size > 1) {
                             // Формируем строку с номерами зарегистрированных абонентов
-                            val subscriberNumbers = subscribers.joinToString(", ") { "${numberToWord(it.code - '0'.code)}" }
+                            val subscriberNumbers = subscribers.joinToString(", ") { numberToWord(it.code - '0'.code) }
                             speakText("В сети находятся: ${subscriberNumbers}. абоненты. Кому из них вы хотите отправить запись?", false)
                             setInput("")
                             delay(14000)
@@ -903,7 +900,7 @@ class MainRepositoryImpl(
                             if (volumeInputValue != null && volumeInputValue in 0..1000) {
                                 setVolumeLevelCtcss(volumeInputValue / 1000.0) // Преобразуем значение от 0-1000 в диапазон от 0.01 до 1
                                 speakText(
-                                    "Громкость субтона установлена на ${volumeInputValue} процентов. его частота ${formatVolumeLevel(getFrequencyCtcss())} герц",
+                                    "Громкость субтона установлена на $volumeInputValue процентов. его частота ${formatVolumeLevel(getFrequencyCtcss())} герц",
                                     false
                                 )
                             } else {
@@ -1260,23 +1257,23 @@ class MainRepositoryImpl(
                         if (isTorchOnIs == 111) {
                             when (key) {
                                 'R' -> {
-                                        subscribers.add('1') // Добавляем абонента, если его еще нет
+                                        subscribers.add('1') // Добавляем абонента, по тону 1000гц
                                         setFrequencyCtcss(203.5) // Субтон для первой радиостанции
                                         speakText("Первый абонент, репитер работает на вас", false)
 
                                 }
                                 'S' -> {
-                                        subscribers.add('2') // Добавляем абонента, если его еще нет
+                                        subscribers.add('2') // Добавляем абонента, по тону 1450гц
                                         setFrequencyCtcss(218.1) // Субтон для второй радиостанции
                                         speakText("Второй абонент, репитер работает на вас", false)
                                 }
                                 'T' -> {
-                                        subscribers.add('3')// Добавляем абонента, если его еще нет
+                                        subscribers.add('3') // Добавляем абонента, по тону 1750гц
                                         setFrequencyCtcss(233.6) // Субтон для третьей радиостанции
                                         speakText("Третий абонент, репитер работает на вас", false)
                                 }
                                 'V' -> {
-                                        subscribers.add('4') // Добавляем абонента, если его еще нет
+                                        subscribers.add('4') // Добавляем абонента, по тону 2100гц
                                         setFrequencyCtcss(250.3) // Субтон для четвертой радиостанции
                                         speakText("Четвертый абонент, репитер работает на вас", false)
                                 }
@@ -1287,7 +1284,7 @@ class MainRepositoryImpl(
                            setFrequencyCtcss(0.0)
                            subscribersNumber = 0
                            subscribers.clear()
-                           speakText("Селективный вызов и звуковой отклик отключены", false)
+                           speakText("Внимание открытый канал. Селективный вызов и звуковой отклик отключены", false)
                         }
                     }
                 }
@@ -1376,6 +1373,7 @@ class MainRepositoryImpl(
                     utils.stopPlayback()
                 }
 
+                @Deprecated("This method overrides a deprecated member", ReplaceWith("..."))
                 override fun onError(utteranceId: String?) {
                     utils.stopPlayback()
                 }

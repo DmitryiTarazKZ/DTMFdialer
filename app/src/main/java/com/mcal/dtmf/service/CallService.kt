@@ -2,7 +2,6 @@ package com.mcal.dtmf.service
 
 import android.os.Build
 import android.telecom.Call
-import android.telecom.CallAudioState
 import android.telecom.InCallService
 import com.mcal.dtmf.data.repositories.main.MainRepository
 import kotlinx.coroutines.CoroutineScope

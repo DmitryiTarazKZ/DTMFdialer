@@ -55,11 +55,8 @@ class HelpScreen : Screen {
                             webView.settings.builtInZoomControls = true
                             webView.settings.displayZoomControls = false
                             webView.settings.setSupportZoom(true)
-                            webView.setDownloadListener { url,
-                                                          userAgent,
-                                                          contentDisposition,
-                                                          mimetype,
-                                                          contentLength ->
+                            webView.setDownloadListener { _, _, _, _, _ ->
+                                // Ваш код для обработки загрузки
                             }
                             webView.loadUrl("file:///android_asset/help/index.html")
                         },

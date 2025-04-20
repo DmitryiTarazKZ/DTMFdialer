@@ -58,7 +58,7 @@ class Utils(
 ) {
     private var lastMissedCallNumber: String? = null
     private var lastMissedCallTime: String? = null
-    private val REQUEST_CODE_CONTACTS_PERMISSION = 1
+    private val requestCodeContactsPermission = 1
     private var audioTrack: AudioTrack? = null
     private var isPlaying = false
     private var availableMB = 0L
@@ -68,7 +68,7 @@ class Utils(
     companion object {
 
         // Получение данных о температуре и заряде батареи
-        fun getCurrentBatteryTemperature(context: Context): String {
+        private fun getCurrentBatteryTemperature(context: Context): String {
             val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
             return try {
                 ((intent!!.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0).toFloat()) / 10).toString()
@@ -77,7 +77,7 @@ class Utils(
             }
         }
 
-        fun getCurrentBatteryLevel(context: Context): String {
+        private fun getCurrentBatteryLevel(context: Context): String {
             val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
             return try {
                 (intent!!.getIntExtra(BatteryManager.EXTRA_LEVEL, 0)).toFloat().toString()
@@ -86,7 +86,7 @@ class Utils(
             }
         }
 
-        fun getCurrentBatteryVoltage(context: Context): String {
+        private fun getCurrentBatteryVoltage(context: Context): String {
             val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
             return try {
                 (intent!!.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0)).toFloat().toString()
@@ -343,7 +343,7 @@ class Utils(
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true) // Настраиваем на частичные результаты
         }
 
-        var silenceDuration = 0 // Переменная для отслеживания времени молчания
+        var silenceDuration: Int // Переменная для отслеживания времени молчания
         val maxSilenceDuration = 10000 // Максимальная продолжительность молчания в миллисекундах
         val timer = Timer()
 
@@ -430,7 +430,7 @@ class Utils(
     }
 
     /// Блок распознавания речевой команды и поиска имени в книге контактов с последующим вызовом
-    fun getContactNumberByName(name: String, context: Context): String? {
+    private fun getContactNumberByName(name: String, context: Context): String? {
         val cr = context.contentResolver
         val projection = arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER)
         var contactNumber: String? = null
@@ -577,12 +577,9 @@ class Utils(
             put(ContactsContract.RawContacts.ACCOUNT_NAME, "")
         }
 
-        // Вставляем новый контакт
+        // Вставляем новый контакт и проверяем, был ли успешно добавлен контакт
         val rawContactUri = context.contentResolver.insert(ContactsContract.RawContacts.CONTENT_URI, values)
-        // Проверяем, был ли успешно добавлен контакт
-        if (rawContactUri == null) {
-            return false // Не удалось создать контакт
-        }
+            ?: return false // Не удалось создать контакт
 
         val rawContactId = ContentUris.parseId(rawContactUri)
 
@@ -592,11 +589,9 @@ class Utils(
             put(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE)
             put(ContactsContract.CommonDataKinds.StructuredName.DISPLAY_NAME, formattedName)
         }
-        val nameUri = context.contentResolver.insert(ContactsContract.Data.CONTENT_URI, nameValues)
-
-        if (nameUri == null) {
-            return false // Не удалось сохранить имя контакта
-        }
+        // Проверяем, удалось ли сохранить имя контакта
+        context.contentResolver.insert(ContactsContract.Data.CONTENT_URI, nameValues)
+            ?: return false // Не удалось сохранить имя контакта
 
         // Сохраняем номер телефона
         val phoneValues = ContentValues().apply {
@@ -605,11 +600,8 @@ class Utils(
             put(ContactsContract.CommonDataKinds.Phone.NUMBER, phoneNumber)
             put(ContactsContract.CommonDataKinds.Phone.TYPE, ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE)
         }
-        val phoneUri = context.contentResolver.insert(ContactsContract.Data.CONTENT_URI, phoneValues)
-        if (phoneUri == null) {
-            return false
-        }
-        return true
+        // Проверяем, удалось ли сохранить номер телефона
+        return context.contentResolver.insert(ContactsContract.Data.CONTENT_URI, phoneValues) != null // Возвращаем true, если номер телефона успешно сохранен
     }
 
     // Функция для удаления контакта из телефонной книги по имени
@@ -621,7 +613,7 @@ class Utils(
             // Запрашиваем разрешение
             ActivityCompat.requestPermissions(context as Activity,
                 arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS),
-                REQUEST_CODE_CONTACTS_PERMISSION)
+                requestCodeContactsPermission)
             return false
         }
 
@@ -662,7 +654,7 @@ class Utils(
     }
 
     // Функция для получения последнего входящего СМС по команде 4*
-    fun getLastIncomingSms(context: Context): String? {
+    fun getLastIncomingSms(context: Context): String {
         val smsUri = Uri.parse("content://sms/inbox")
         val cursor = context.contentResolver.query(smsUri, null, null, null, "date DESC")
         cursor?.use {
@@ -770,7 +762,7 @@ class Utils(
         val words = updatedInput.split(" ")
         val convertedWords = words.map { word ->
             word.map { char ->
-                val lowerChar = char.toLowerCase() // Преобразуем символ в нижний регистр
+                val lowerChar = char.lowercaseChar() // Преобразуем символ в нижний регистр
                 val transliteratedChar = transliterationMap[lowerChar] ?: lowerChar
                 transliteratedChar
             }.joinToString("")
@@ -814,8 +806,7 @@ class Utils(
      fun voxActivation(delayMillis: Long = 2000, voxActivation: Long = 500, onComplete: suspend () -> Unit) {
         val sampleRate = 44100 // Частота дискретизации
         val frequency = 800.0 // Частота звука (не допустимо выбирать частоту активации кратной или равной тонам определения)
-        val duration = voxActivation // Длительность звука в миллисекундах
-        val bufferSize = (sampleRate * duration / 1000).toInt() // Размер буфера
+        val bufferSize = (sampleRate * voxActivation / 1000).toInt() // Размер буфера
 
          scope.launch {
                 delay(delayMillis)

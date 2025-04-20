@@ -1,8 +1,6 @@
 package com.mcal.dtmf.data.model.domain.main
 
 import android.telecom.Call
-import com.mcal.dtmf.recognizer.Spectrum
-import com.mcal.dtmf.utils.CallDirection
 
 data class MainScreenState(
     val keys: List<Char> = listOf(

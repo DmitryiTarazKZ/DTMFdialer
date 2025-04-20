@@ -1,9 +1,6 @@
 package com.mcal.dtmf.recognizer
 
-import android.util.Log
-import com.mcal.dtmf.data.repositories.main.MainRepository
 import org.koin.core.component.KoinComponent
-import org.koin.core.component.inject
 
 class StatelessRecognizer(private val spectrum: Spectrum) : KoinComponent {
     // Массив частот и соответствующих символов
