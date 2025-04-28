@@ -16,6 +16,7 @@ import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.telecom.Call
+import android.util.Log
 import com.mcal.dtmf.recognizer.DataBlock
 import com.mcal.dtmf.recognizer.Recognizer
 import com.mcal.dtmf.recognizer.Spectrum
@@ -66,9 +67,10 @@ class MainRepositoryImpl(
     private val _isRecording: MutableStateFlow<Boolean?> = MutableStateFlow(null)
     private val _amplitudeCheck: MutableStateFlow<Boolean?> = MutableStateFlow(null)
     private val _sim: MutableStateFlow<Int> = MutableStateFlow(0)
+    private val _selectedSubscriberNumber: MutableStateFlow<Int> = MutableStateFlow(0)
     private val _frequencyCtcss: MutableStateFlow<Double> = MutableStateFlow(0.0)
     private val _volumeLevelCtcss: MutableStateFlow<Double> = MutableStateFlow(0.08)
-    private val _recordedFiles = mutableListOf<String>()
+
 
     private val blockingQueue = LinkedBlockingQueue<DataBlock>()
     private val recognizer = Recognizer()
@@ -186,6 +188,7 @@ class MainRepositoryImpl(
     }
 
     override fun setFrequencyCtcss(frequencyCtcss: Double) {
+        Log.e("Контрольный лог", "ЗНАЧЕНИЕ ЧАСТОТЫ: $frequencyCtcss")
         _frequencyCtcss.update { frequencyCtcss }
     }
 
@@ -201,22 +204,6 @@ class MainRepositoryImpl(
         _volumeLevelCtcss.update { volumeLevelCtcss }
     }
 
-    override fun getRecordedFilesFlow(): Flow<String> = flow {
-        emitAll(_recordedFiles.asFlow())
-    }
-
-    override fun getRecordedFiles(): List<String> {
-        return _recordedFiles.toList()
-    }
-
-    override fun setRecordedFiles(recordedFiles: List<String>) {
-        _recordedFiles.addAll(recordedFiles)
-    }
-
-    override fun clearRecordedFiles() {
-        _recordedFiles.clear()
-    }
-
     override fun getCallStateFlow(): Flow<Int> = flow {
         emitAll(_callState)
     }
@@ -228,7 +215,7 @@ class MainRepositoryImpl(
     override fun setCallState(callState: Int) {
         if (getFrequencyCtcss() != 0.0 && (callState == 2 || callState == 1 || callState == 4)) {
             // Генерируем субтон в поток вызова если входящий, исходящий или трубку подняли
-            utils.playCTCSS(getFrequencyCtcss(), getVolumeLevelCtcss())
+            utils.playCTCSS(getFrequencyCtcss(), getVolumeLevelCtcss() - 0.02) // Коррекция уровня для устранения опасности зависания на передаче
         }
         if (getFrequencyCtcss() != 0.0 && callState == 7) {
             utils.stopPlayback() // Прекращаем генерацию если вызов завершен
@@ -367,6 +354,18 @@ class MainRepositoryImpl(
 
     override fun setSim(value: Int) {
         _sim.update { value }
+    }
+
+    override fun getSelectedSubscriberNumberFlow(): Flow<Int> = flow {
+        emitAll(_selectedSubscriberNumber)
+    }
+
+    override fun getSelectedSubscriberNumber(): Int {
+        return _selectedSubscriberNumber.value
+    }
+
+    override fun setSelectedSubscriberNumber(value: Int) {
+        _selectedSubscriberNumber.update { value }
     }
 
     // Запись с микрофона в массив для анализа DTMF
@@ -645,114 +644,22 @@ class MainRepositoryImpl(
 
                 // Запись голосовой заметки
                 else if (input == "7" && getCall() == null) {
-                    playSoundJob.launch {
-                        val recordedFiles = getRecordedFiles()
-                        val noteCount = recordedFiles.size
-
-                        if (isTorchOnIs == 111 && subscribers.size > 1) {
-                            // Формируем строку с номерами зарегистрированных абонентов
-                            val subscriberNumbers = subscribers.joinToString(", ") { numberToWord(it.code - '0'.code) }
-                            speakText("В сети находятся: ${subscriberNumbers}. абоненты. Кому из них вы хотите отправить запись?", false)
-                            setInput("")
-                            delay(14000)
-                            subscribersNumber = getInput()?.takeIf { it.isNotEmpty() }?.toIntOrNull() ?: 6
-
-                            // Массив частот и соответствующих номеров абонентов
-                            val frequencies = arrayOf(203.5, 218.1, 233.6, 250.3)
-                            val subscriberIndex = subscribersNumber - 1 // Индекс для массива
-
-                            // Проверяем, отправляем ли сообщение самому себе
-                            if (subscribersNumber in 1..4 && getFrequencyCtcss() == frequencies[subscriberIndex]) {
-                                speakText("${numberToWord(subscribersNumber)} ты отправляешь сообщение сам себе, говори", false)
-                                delay(7000)
-                                utils.startRecording(subscribersNumber)
-                                setInput("")
-                            }
-                            // Проверяем, существует ли введенный номер в списке абонентов
-                            else if (subscribers.contains((subscribersNumber + '0'.code).toChar())) {
-                                speakText("Сообщение получит ${numberToWord(subscribersNumber)} абонент, можете говорить", false)
-                                delay(7000)
-                                utils.startRecording(subscribersNumber)
-                                setInput("")
-                            } else {
-                                speakText("${numberToWord(subscribersNumber)} не доступен. Доступны только: $subscriberNumbers", false)
-                                setInput("")
-                            }
-                        } else {
-                            val message = if (noteCount == 0) {
-                                "Голосовая запись номер один, можете говорить"
-                            } else {
-                                "Голосовая запись номер ${noteCount + 1}, можете говорить"
-                            }
-                            speakText(message, false)
-                            delay(6000)
-                            utils.startRecording(subscribersNumber)
-                        }
-                    }
+                    utils.startRecording(isTorchOnIs, subscribers)
                     setInput("")
                 }
 
                 // Удаление голосовой заметки
                 else if (input == "8" && getCall() == null) {
-                    playSoundJob.launch {
-                        val recordedFiles = getRecordedFiles()
-                        val noteCount = recordedFiles.size
-                        if (noteCount == 0) {
-                            speakText("Нет данных для удаления", false)
-                            setInput("")
-                        } else {
-                            speakText("Введите номер записи которую требуется удалить. Для удаления всех записей введите 381", false)
-                            setInput("")
-                            delay(18000)
-                            val userInput1 = getInput()?.toLongOrNull()
-                            if (userInput1 != null && userInput1 == 381L) {
-                                utils.deleteRecordedFile(null) // Удаляем все записи
-                                setInput("")
-                            } else if (userInput1 != null && userInput1 in 1..noteCount) {
-                                utils.deleteRecordedFile(userInput1.toInt() - 1) // Удаляем конкретную запись
-                                setInput("")
-                            } else {
-                                speakText("Удаление отменено", false)
-                                setInput("")
-                            }
-                        }
-                    }
+                    utils.deleteRecordedFile(isTorchOnIs, subscribers)
+                    setInput("")
+
                 }
 
                 // Воспроизведение голосовой заметки
                 else if (input == "9" && getCall() == null) {
-                    playSoundJob.launch {
-                        val recordedFiles = getRecordedFiles()
-                        val noteCount = recordedFiles.size
-                        if (noteCount == 0) {
-                            speakText("Голосовые записи отсутствуют", false)
-                            setInput("")
-                        } else if (noteCount == 1) {
-                            setInput("")
-                            delay(1500)
-                            utils.playRecordedFile(0, 1000)
-                        } else if (isTorchOnIs == 111 && subscribersNumber != 0) {
-                            setInput("")
-                            delay(1500)
-                            utils.playRecordedFile(noteCount - 1, 1000)
-                        } else {
-                            val noteCountText = if (noteCount == 2) "две" else noteCount.toString()
-                            speakText("Какую запись требуется воспроизвести? Всего их $noteCountText", false)
-                            setInput("")
-                            delay(12000)
-                            val userInput = getInput()?.toLongOrNull()
-                            if (userInput != null && userInput in 1..noteCount) {
-                                utils.playRecordedFile(userInput.toInt() - 1, 1000)
-                            } else {
-                                if (userInput == null) {
-                                    utils.playRecordedFile(noteCount - 1, 1000)
-                                } else {
-                                    speakText("Неверный номер записи", false)
-                                }
-                            }
-                        }
-                        setInput("")
-                    }
+                    utils.playRecordedFile(isTorchOnIs, subscribers, 0)
+                    setInput("")
+
                 }
 
                 // Настройка VOX Контрольное предложение не менять под него нарисована Диаграмма настройки
@@ -1232,7 +1139,7 @@ class MainRepositoryImpl(
 
                     else if (!isSpeaking) {
                         if (getIsRecording()) {
-                            utils.stopRecording(subscribersNumber, isTorchOnIs, subscribers)
+                            utils.stopRecording(isTorchOnIs, subscribers)
                         } else speakText("Номеронабиратель, очищен", false)
                     }
                 } else {
@@ -1257,25 +1164,44 @@ class MainRepositoryImpl(
                         if (isTorchOnIs == 111) {
                             when (key) {
                                 'R' -> {
-                                        subscribers.add('1') // Добавляем абонента, по тону 1000гц
+                                    subscribers.add('1') // Добавляем абонента, по тону 1000гц
+                                    setSelectedSubscriberNumber(1)
+                                    if (getFrequencyCtcss() == 203.5) {
+                                            utils.playRecordedFile(isTorchOnIs, subscribers, 1)
+                                    } else {
                                         setFrequencyCtcss(203.5) // Субтон для первой радиостанции
-                                        speakText("Первый абонент, репитер работает на вас", false)
-
+                                        speakText("Первый, репитер переключен на тебя", false)
+                                    }
                                 }
                                 'S' -> {
-                                        subscribers.add('2') // Добавляем абонента, по тону 1450гц
-                                        setFrequencyCtcss(218.1) // Субтон для второй радиостанции
-                                        speakText("Второй абонент, репитер работает на вас", false)
+                                    subscribers.add('2') // Добавляем абонента, по тону 1450гц
+                                    setSelectedSubscriberNumber(2)
+                                    if (getFrequencyCtcss() == 218.1) {
+                                            utils.playRecordedFile(isTorchOnIs, subscribers, 2)
+                                    } else {
+                                        setFrequencyCtcss(218.1) // Субтон для первой радиостанции
+                                        speakText("Второй, репитер переключен на тебя", false)
+                                    }
                                 }
                                 'T' -> {
-                                        subscribers.add('3') // Добавляем абонента, по тону 1750гц
-                                        setFrequencyCtcss(233.6) // Субтон для третьей радиостанции
-                                        speakText("Третий абонент, репитер работает на вас", false)
+                                    subscribers.add('3') // Добавляем абонента, по тону 1750гц
+                                    setSelectedSubscriberNumber(3)
+                                    if (getFrequencyCtcss() == 233.6) {
+                                            utils.playRecordedFile(isTorchOnIs, subscribers, 3)
+                                    } else {
+                                        setFrequencyCtcss(233.6) // Субтон для первой радиостанции
+                                        speakText("Третий, репитер переключен на тебя", false)
+                                    }
                                 }
                                 'V' -> {
-                                        subscribers.add('4') // Добавляем абонента, по тону 2100гц
-                                        setFrequencyCtcss(250.3) // Субтон для четвертой радиостанции
-                                        speakText("Четвертый абонент, репитер работает на вас", false)
+                                    subscribers.add('4') // Добавляем абонента, по тону 2100гц
+                                    setSelectedSubscriberNumber(4)
+                                    if (getFrequencyCtcss() == 250.3) {
+                                            utils.playRecordedFile(isTorchOnIs, subscribers, 4)
+                                    } else {
+                                        setFrequencyCtcss(250.3) // Субтон для первой радиостанции
+                                        speakText("Четвертый, репитер переключен на тебя", false)
+                                    }
                                 }
                             }
                         }
@@ -1389,17 +1315,6 @@ class MainRepositoryImpl(
                     textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
                 }
             }
-        }
-    }
-
-    // Функция для преобразования номера в слово
-    private fun numberToWord(number: Int): String {
-        return when (number) {
-            1 -> "Первый"
-            2 -> "Второй"
-            3 -> "Третий"
-            4 -> "Четвертый"
-            else -> "Система может поддерживать только четыре абонента, этот номер" // На случай, если номер не в диапазоне
         }
     }
 }

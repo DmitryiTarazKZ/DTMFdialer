@@ -28,7 +28,6 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.telephony.SmsManager
-import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.mcal.dtmf.data.repositories.main.MainRepository
@@ -64,6 +63,7 @@ class Utils(
     private var availableMB = 0L
     private var audioRecord1: AudioRecord? = null
     private var recordedFilePath: String? = null
+    private val recordedFiles = mutableListOf<String>()
 
     companion object {
 
@@ -880,7 +880,6 @@ class Utils(
 
         // Проверка состояния AudioTrack
         if (audioTrack?.state != AudioTrack.STATE_INITIALIZED) {
-            Log.e("AudioTrack", "AudioTrack не инициализирован")
             return
         }
 
@@ -967,10 +966,8 @@ class Utils(
                     // Запись в AudioTrack с обработкой ошибок
                     val result = audioTrack?.write(byteBuffer, 0, byteBuffer.size)
                     if (result == AudioTrack.ERROR_INVALID_OPERATION) {
-                        Log.e("AudioTrack", "Ошибка записи: INVALID_OPERATION")
                         break
                     } else if (result == AudioTrack.ERROR) {
-                        Log.e("AudioTrack", "Ошибка записи: ERROR")
                         break
                     }
                 }
@@ -978,6 +975,7 @@ class Utils(
         }
     }
 
+    // Oстановка генерации субтона
     fun stopPlayback() {
         if (isPlaying) {
             isPlaying = false
@@ -986,58 +984,119 @@ class Utils(
             // audioTrack = null // Не обнуляйте, если хотите использовать его повторно
         }
     }
+    // Запись голосового сообщения
+    fun startRecording(isTorchOnIs: Int, subscribers: Set<Char>) {
+        scope.launch {
+            // Проверяем, идет ли уже запись
+            if (mainRepository.getIsRecording() == true) {
+                mainRepository.speakText("Запись уже идет. Пожалуйста, остановите текущую запись перед началом новой.", false)
+                return@launch
+            }
 
-    fun startRecording(subscribersNumber: Int) {
-        if (ActivityCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            return
-        }
-        availableMB = getAvailableMemoryInMB()
-        if (availableMB < 5) {
-            mainRepository.speakText("В памяти нет места для записи, осталось всего 5 мегабайт. Освободите память", false)
-            return
-        }
-        val sampleRate = 44100
-        val channelConfig = AudioFormat.CHANNEL_IN_MONO
-        val audioFormat = AudioFormat.ENCODING_PCM_16BIT
-        val bufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
-        if (bufferSize <= 0) {
-            return
-        }
-        val fileName = "voice_note_${subscribersNumber}_${System.currentTimeMillis()}.pcm" // Сохраняем в формате PCM
-        recordedFilePath = File(context.getExternalFilesDir(null), fileName).absolutePath // Устанавливаем путь к файлу
-        audioRecord1 = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
-            sampleRate,
-            channelConfig,
-            audioFormat,
-            bufferSize
-        )
-        if (audioRecord1?.state != AudioRecord.STATE_INITIALIZED) {
-            return
-        }
-        audioRecord1?.startRecording()
-        mainRepository.setIsRecording(true)
-        val buffer = ShortArray(bufferSize)
-        FileOutputStream(recordedFilePath).use { fos ->
-            while (mainRepository.getIsRecording() == true) {
-                val readSize = audioRecord1?.read(buffer, 0, buffer.size) ?: 0
-                if (readSize > 0) {
-                    val byteBuffer = ByteArray(readSize * 2)
-                    for (i in 0 until readSize) {
-                        val amplifiedSample = (buffer[i] * 4).coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
-                        byteBuffer[i * 2] = (amplifiedSample and 0xFF).toByte()
-                        byteBuffer[i * 2 + 1] = (amplifiedSample shr 8 and 0xFF).toByte()
-                    }
-                    fos.write(byteBuffer)
+            if (ActivityCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.RECORD_AUDIO
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                return@launch
+            }
+
+            if (isTorchOnIs == 111 && subscribers.size > 1) {
+                mainRepository.speakText("Доступны ${subscribers} кому отправить сообщение?", false)
+                delay(10000)
+
+                val input = mainRepository.getInput()
+                val selectedSubscriber = input?.toIntOrNull()
+
+                if (selectedSubscriber == null) {
+                    mainRepository.speakText("Вы ничего не ввели", false)
+                    return@launch
                 } else {
-                    // speakText("Ошибка чтения с буфера", false)
+                    // Проверяем, доступен ли введенный адресат
+                    if (subscribers.contains(selectedSubscriber.toString().first())) {
+                        mainRepository.speakText("Сообщение получит абонент номер $selectedSubscriber, говорите", false)
+                        mainRepository.setInput("")
+                        mainRepository.setSelectedSubscriberNumber(selectedSubscriber)
+                        delay(5000)
+                    } else {
+                        mainRepository.speakText("Абонент номер $selectedSubscriber не доступен", false)
+                        mainRepository.setInput("")
+                        return@launch
+                    }
+                }
+
+            } else {
+                val noteCount = recordedFiles.size
+                if (noteCount == 0) {
+                    mainRepository.speakText("Голосовая запись номер один, можете говорить", false)
+                } else {
+                    mainRepository.speakText("Голосовая запись номер ${noteCount + 1}, можете говорить", false)
+                }
+                delay(6000) // при 5 сек в запись попадают слова можете говорить если нет полной развязки между входом и выходом смартфона
+            }
+
+            availableMB = getAvailableMemoryInMB()
+            if (availableMB < 5) {
+                mainRepository.speakText("В памяти нет места для записи, осталось всего 5 мегабайт. Освободите память", false)
+                return@launch
+            }
+
+            val sampleRate = 44100
+            val channelConfig = AudioFormat.CHANNEL_IN_MONO
+            val audioFormat = AudioFormat.ENCODING_PCM_16BIT
+            val bufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
+            if (bufferSize <= 0) {
+                return@launch
+            }
+
+            val fileName =
+                "selective:${isTorchOnIs}_registers:${subscribers}_adresat:${mainRepository.getSelectedSubscriberNumber()}_time:${System.currentTimeMillis()}.pcm" // Сохраняем в формате PCM
+            recordedFilePath = File(
+                context.getExternalFilesDir(null),
+                fileName
+            ).absolutePath // Устанавливаем путь к файлу
+
+            audioRecord1 = AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                sampleRate,
+                channelConfig,
+                audioFormat,
+                bufferSize
+            )
+
+            if (audioRecord1?.state != AudioRecord.STATE_INITIALIZED) {
+                return@launch
+            }
+
+            audioRecord1?.startRecording()
+            mainRepository.setIsRecording(true)
+            val buffer = ShortArray(bufferSize)
+
+            FileOutputStream(recordedFilePath).use { fos ->
+                while (mainRepository.getIsRecording() == true) {
+                    val readSize = audioRecord1?.read(buffer, 0, buffer.size) ?: 0
+                    if (readSize > 0) {
+                        val byteBuffer = ByteArray(readSize * 2)
+                        for (i in 0 until readSize) {
+                            val amplifiedSample = (buffer[i] * 4).coerceIn(
+                                Short.MIN_VALUE.toInt(),
+                                Short.MAX_VALUE.toInt()
+                            )
+                            byteBuffer[i * 2] = (amplifiedSample and 0xFF).toByte()
+                            byteBuffer[i * 2 + 1] = (amplifiedSample shr 8 and 0xFF).toByte()
+                        }
+                        fos.write(byteBuffer)
+                    } else {
+                        // speakText("Ошибка чтения с буфера", false)
+                    }
                 }
             }
+
+            audioRecord1?.stop()
+            audioRecord1?.release()
+            audioRecord1 = null
+            recordedFiles.add(recordedFilePath!!)
         }
-        audioRecord1?.stop()
-        audioRecord1?.release()
-        audioRecord1 = null
-        mainRepository.setRecordedFiles(listOf(recordedFilePath!!))
     }
 
     // Функция для получения доступной памяти в мегабайтах
@@ -1048,20 +1107,20 @@ class Utils(
     }
 
     // Функция для остановки записи
-    fun stopRecording(subscribersNumber: Int, isTorchOnIs: Int, subscribers: Set<Char>) {
+    fun stopRecording(isTorchOnIs: Int, subscribers: Set<Char>) {
         scope.launch {
             try {
                 if (mainRepository.getIsRecording() == true) {
-                    audioRecord1?.stop() // Останавливаем запись
-                    audioRecord1?.release() // Освобождаем ресурсы
-                    audioRecord1 = null // Сбрасываем ссылку
-                    mainRepository.setIsRecording(false) // Устанавливаем флаг записи в false
+                    audioRecord1?.stop()
+                    audioRecord1?.release()
+                    audioRecord1 = null
+                    mainRepository.setIsRecording(false)
 
                     if (isTorchOnIs == 111  && subscribers.size > 1) {
                         val message = if (availableMB < 100) {
-                            "Запись отправлена абоненту с номером $subscribersNumber. Заканчивается память, осталось $availableMB мегабайт"
+                            "Запись отправлена абоненту с номером ${mainRepository.getSelectedSubscriberNumber()}. Заканчивается память, осталось $availableMB мегабайт"
                         } else {
-                            "Запись отправлена абоненту с номером $subscribersNumber"
+                            "Запись отправлена абоненту с номером ${mainRepository.getSelectedSubscriberNumber()}"
                         }
                         mainRepository.speakText(message, false)
                     } else {
@@ -1074,21 +1133,21 @@ class Utils(
                     }
 
                     delay(10000)
-                    if (subscribersNumber == 1) {
+                    if (mainRepository.getSelectedSubscriberNumber() == 1) {
                         mainRepository.setFrequencyCtcss(203.5)
-                        mainRepository.speakText("Первый абонент вам поступила голосовая запись", false)
+                        mainRepository.speakText("Первый, вам поступило голосовое сообщение", false)
                     }
-                    if (subscribersNumber == 2) {
+                    if (mainRepository.getSelectedSubscriberNumber() == 2) {
                         mainRepository.setFrequencyCtcss(218.1)
-                        mainRepository.speakText("Второй абонент вам поступила голосовая запись", false)
+                        mainRepository.speakText("Второй, вам поступило голосовое сообщение", false)
                     }
-                    if (subscribersNumber == 3) {
+                    if (mainRepository.getSelectedSubscriberNumber() == 3) {
                         mainRepository.setFrequencyCtcss(233.6)
-                        mainRepository.speakText("Третий абонент вам поступила голосовая запись", false)
+                        mainRepository.speakText("Третий, вам поступило голосовое сообщение", false)
                     }
-                    if (subscribersNumber == 4) {
+                    if (mainRepository.getSelectedSubscriberNumber() == 4) {
                         mainRepository.setFrequencyCtcss(250.3)
-                        mainRepository.speakText("Четвертый абонент вам поступила голосовая запись", false)
+                        mainRepository.speakText("Четвертый, вам поступило голосовое сообщение", false)
                     }
                 }
             } catch (e: IllegalStateException) {
@@ -1098,77 +1157,118 @@ class Utils(
     }
 
     // Функция для воспроизведения записанного файла
-    fun playRecordedFile(index: Int, trimDurationMs: Int) {
-        Log.e("Контрольный лог", "ЗНАЧЕНИЕ index: $index ЗНАЧЕНИЕ trimDurationMs: $trimDurationMs")
-        val recordedFiles = mainRepository.getRecordedFiles() // Получаем список записанных файлов
+    fun playRecordedFile(isTorchOnIs: Int, subscribers: Set<Char>, abonent: Int) {
+        scope.launch {
+
+            if (mainRepository.getFrequencyCtcss() != 0.0) {
+                playCTCSS(mainRepository.getFrequencyCtcss(), mainRepository.getVolumeLevelCtcss())
+            }
+
+            if (abonent in 1..4) {
+                // Воспроизводим последнюю запись, адресованную конкретному абоненту
+                val subscriberFiles = recordedFiles.filter { file ->
+                    file.contains("adresat:$abonent")
+                }
+
+                if (subscriberFiles.isEmpty()) {
+                    mainRepository.speakText("${getOrdinalNumber(abonent)}. У вас нет входящих сообщений", false)
+                    return@launch
+                } else {
+                    // Воспроизводим последнюю запись
+                    playAudioFile(subscriberFiles.last())
+                    return@launch
+                }
+            }
+
+            if (isTorchOnIs == 111 && subscribers.size > 1) {
+                // Подсчитываем количество сообщений, адресованных конкретному абоненту
+                val subscriberFiles = recordedFiles.filter { file ->
+                     file.contains("selective:111") && file.contains("adresat:${mainRepository.getSelectedSubscriberNumber()}")
+                }
+
+                val specificNoteCount = subscriberFiles.size
+
+                if (specificNoteCount == 0) {
+                    mainRepository.speakText("${getOrdinalNumber(mainRepository.getSelectedSubscriberNumber())}. У вас нет входящих сообщений", false)
+                    return@launch
+                } else if (specificNoteCount == 1) {
+                    // Если только одно сообщение, воспроизводим его сразу
+                    playAudioFile(subscriberFiles[0])
+                    return@launch
+                } else {
+                    mainRepository.speakText("${getOrdinalNumber(mainRepository.getSelectedSubscriberNumber())}, у вас $specificNoteCount сообщения. Какое из них требуется воспроизвести?", false)
+                    delay(15000)
+                }
+
+                // Получаем индекс записи для воспроизведения
+                val input = mainRepository.getInput()?.toIntOrNull()
+                val index = input?.minus(1)
+
+                if (index == null || index < 0 || index >= subscriberFiles.size) {
+                    mainRepository.speakText("Сообщения с таким номером нет", false)
+                    mainRepository.setInput("")
+                    return@launch
+                }
+                playAudioFile(subscriberFiles[index])
+                mainRepository.setInput("")
+            } else {
+                // Подсчитываем количество сообщений, созданных при отключенном селективнов вызове
+                val subscriberFiles = recordedFiles.filter { file ->
+                    file.contains("selective:0")
+                }
+
+                val specificNoteCount = subscriberFiles.size
+
+                if (specificNoteCount == 0) {
+                    mainRepository.speakText("У вас нет входящих сообщений", false)
+                    return@launch
+                } else if (specificNoteCount == 1) {
+                    // Если только одно сообщение, воспроизводим его сразу
+                    playAudioFile(recordedFiles[0])
+                    return@launch
+                } else {
+                    val countText = if (specificNoteCount == 2) "две" else specificNoteCount.toString()
+                    mainRepository.speakText("Какую запись требуется воспроизвести? Всего их $countText", false)
+                    delay(15000)
+                }
+
+                // Получаем индекс записи для воспроизведения
+                val index = mainRepository.getInput()?.toIntOrNull()?.minus(1)
+
+                if (index == null || index < 0 || index >= recordedFiles.size) {
+                    mainRepository.speakText("Записи с таким номером нет", false)
+                    mainRepository.setInput("")
+                    return@launch
+                }
+
+                // Воспроизводим выбранное сообщение
+                playAudioFile(subscriberFiles[index])
+                mainRepository.setInput("")
+            }
+        }
+    }
+
+    // Вспомогательная функция для воспроизведения аудиофайла
+    private fun playAudioFile(path: String) {
 
         if (mainRepository.getFrequencyCtcss() != 0.0) {
             playCTCSS(mainRepository.getFrequencyCtcss(), mainRepository.getVolumeLevelCtcss())
         }
 
-        // Проверяем, что индекс находится в допустимом диапазоне
-        if (index < 0 || index >= recordedFiles.size) {
-            mainRepository.speakText("Записи с таким номером нет", false)
-            return
-        }
-
-        // Определяем путь к файлу
-        val path: String
-        val currentFrequency = mainRepository.getFrequencyCtcss()
-
-        if (currentFrequency == 0.0) {
-            // Если частота равна 0.0, используем файл по индексу
-            path = recordedFiles[index]
-        } else {
-            // Ищем файл с соответствующим номером абонента по частоте
-            val matchingFiles = when (currentFrequency) {
-                203.5 -> recordedFiles.filter { it.contains("voice_note_1") }
-                218.1 -> recordedFiles.filter { it.contains("voice_note_2") }
-                233.6 -> recordedFiles.filter { it.contains("voice_note_3") }
-                250.3 -> recordedFiles.filter { it.contains("voice_note_4") }
-                else -> emptyList()
-            }
-
-            if (matchingFiles.isNotEmpty()) {
-                // Если есть файлы, адресованные абоненту, берем последний
-                path = matchingFiles.last()
-            } else {
-                // Определяем номер абонента по частоте
-                val subscriberNumber = when (currentFrequency) {
-                    203.5 -> 1
-                    218.1 -> 2
-                    233.6 -> 3
-                    250.3 -> 4
-                    else -> null
-                }
-
-                if (subscriberNumber != null) {
-                    mainRepository.speakText("Абонент номер $subscriberNumber, у вас нет входящих сообщений", false)
-                } else {
-                    mainRepository.speakText("Нет записанных файлов для данной частоты", false)
-                }
-                return
-            }
-        }
-
         val file = File(path)
 
         if (file.exists()) {
-
-            // Создаем AudioAttributes
             val audioAttributes = AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_MEDIA)
                 .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                 .build()
 
-            // Создаем AudioFormat
             val audioFormat = AudioFormat.Builder()
                 .setChannelMask(AudioFormat.CHANNEL_OUT_MONO) // Моно
                 .setSampleRate(44100) // Частота дискретизации
                 .setEncoding(AudioFormat.ENCODING_PCM_16BIT) // 16 бит
                 .build()
 
-            // Создаем AudioTrack для воспроизведения в режиме потока
             val audioTrack = AudioTrack(
                 audioAttributes,
                 audioFormat,
@@ -1177,43 +1277,36 @@ class Utils(
                 AudioManager.AUDIO_SESSION_ID_GENERATE // Генерация ID сессии
             )
 
-            // Устанавливаем громкость на 100%
             audioTrack.setVolume(1.0f)
 
-            // Открываем поток для чтения файла
             FileInputStream(file).use { fis ->
-                val buffer = ByteArray(1024) // Используем буфер фиксированного размера
+                val buffer = ByteArray(1024)
                 val byteArrayOutputStream = ByteArrayOutputStream()
                 var bytesRead: Int
 
-                // Читаем данные из файла и записываем в ByteArrayOutputStream
                 while (fis.read(buffer).also { bytesRead = it } != -1) {
                     byteArrayOutputStream.write(buffer, 0, bytesRead)
                 }
 
-                // Получаем массив байтов из ByteArrayOutputStream
                 val audioData = byteArrayOutputStream.toByteArray()
 
-                // Рассчитываем количество байтов для обрезки
-                val bytesPerSecond = audioFormat.sampleRate * 2 // 2 байта на сэмпл (16 бит)
-                val trimBytes = (trimDurationMs * bytesPerSecond) / 1000 // Обрезаем указанное время в миллисекундах
+                val bytesPerSecond = audioFormat.sampleRate * 2
+                val trimBytes = (1000 * bytesPerSecond) / 1000 // Обрезаем указанное время в миллисекундах (1 значение)
 
-                // Убедимся, что не обрезаем больше, чем есть в аудиофайле
                 val trimmedAudioData = if (audioData.size > trimBytes) {
                     audioData.copyOf(audioData.size - trimBytes)
                 } else {
-                    audioData // Если обрезка больше, чем размер, просто используем оригинал
+                    audioData
                 }
 
-                // Воспроизводим обрезанный звук
-                audioTrack.play() // Начинаем воспроизведение
+                audioTrack.play()
                 audioTrack.write(trimmedAudioData, 0, trimmedAudioData.size)
             }
 
-            audioTrack.stop() // Останавливаем воспроизведение после завершения
-            audioTrack.release() // Освобождаем ресурсы
+            audioTrack.stop()
+            audioTrack.release()
             if (mainRepository.getFrequencyCtcss() != 0.0) {
-                stopPlayback() // Отключаем субтон
+                stopPlayback()
             }
         } else {
             mainRepository.speakText("Нет записанных файлов", false)
@@ -1221,33 +1314,128 @@ class Utils(
     }
 
     // Функция для удаления записанного файла
-    fun deleteRecordedFile(trackIndex: Int?) {
-        val recordedFiles = mainRepository.getRecordedFiles()
-        if (trackIndex != null) {
-            // Удаляем конкретную запись
-            val filePath = recordedFiles.getOrNull(trackIndex)
-            if (filePath != null) {
-                val file = File(filePath)
-                if (file.exists() && file.delete()) {
-                    mainRepository.speakText("Запись под номером ${trackIndex + 1} успешно удалена", false)
-                    mainRepository.clearRecordedFiles()
-                    val updatedFiles = recordedFiles.filterIndexed { index, _ -> index != trackIndex }
-                    mainRepository.setRecordedFiles(updatedFiles) // Обновляем список в репозитории
+    fun deleteRecordedFile(isTorchOnIs: Int, subscribers: Set<Char>) {
+        scope.launch {
+            if (isTorchOnIs == 111 && subscribers.size > 1) {
+                // Подсчитываем количество сообщений, адресованных конкретному абоненту
+                val subscriberFiles = recordedFiles.filter { file ->
+                    file.contains("selective:111") && file.contains("adresat:${mainRepository.getSelectedSubscriberNumber()}")
+                }
+
+                val specificNoteCount = subscriberFiles.size
+
+                if (specificNoteCount == 0) {
+                    mainRepository.speakText("${getOrdinalNumber(mainRepository.getSelectedSubscriberNumber())}. Нет данных для удаления", false)
+                    mainRepository.setInput("")
+                    return@launch
+                } else {
+                    val countText = if (specificNoteCount == 1) "одно" else specificNoteCount.toString()
+                    mainRepository.speakText("${getOrdinalNumber(mainRepository.getSelectedSubscriberNumber())}, у вас $countText сообщения. Какое из них требуется удалить? Введите 0 для удаления всех.", false)
+                    delay(15000)
+                }
+
+                // Получаем индекс записи для удаления
+                val input = mainRepository.getInput()?.toIntOrNull()
+                if (input == 0) {
+                    // Удаляем все записи, адресованные конкретному абоненту
+                    subscriberFiles.forEach { filePathToDelete ->
+                        val fileToDelete = File(filePathToDelete)
+                        if (fileToDelete.exists() && fileToDelete.delete()) {
+                            recordedFiles.remove(filePathToDelete) // Удаляем запись из списка
+                        }
+                    }
+                    mainRepository.speakText("Все записи успешно удалены", false)
+                    mainRepository.setInput("")
+                    return@launch
+                }
+
+                val index = input?.minus(1)
+
+                if (index == null || index < 0 || index >= subscriberFiles.size) {
+                    mainRepository.speakText("Записи с таким номером нет", false)
+                    mainRepository.setInput("")
+                    return@launch
+                }
+
+                // Удаляем конкретную запись, адресованную конкретному абоненту
+                val filePathToDelete = subscriberFiles[index]
+                val fileToDelete = File(filePathToDelete)
+                if (fileToDelete.exists() && fileToDelete.delete()) {
+                    mainRepository.speakText("Запись успешно удалена", false)
+                    recordedFiles.remove(filePathToDelete) // Удаляем запись из списка
                 } else {
                     mainRepository.speakText("Не удалось удалить запись", false)
                 }
+
+                mainRepository.setInput("")
             } else {
-                mainRepository.speakText("Запись не найдена", false)
-            }
-        } else {
-            recordedFiles.forEach { path ->
-                val file = File(path)
-                if (file.exists()) {
-                    file.delete()
+                // Подсчитываем количество сообщений, созданных при отключенном селективном вызове
+                val subscriberFiles = recordedFiles.filter { file ->
+                    file.contains("selective:0")
                 }
+
+                val specificNoteCount = subscriberFiles.size
+
+                if (specificNoteCount == 0) {
+                    mainRepository.speakText("Нет данных для удаления", false)
+                    mainRepository.setInput("")
+                    return@launch
+                } else {
+                    val countText = when (specificNoteCount) {
+                        1 -> "одна"
+                        2 -> "две"
+                        else -> specificNoteCount.toString() // Для остальных случаев просто возвращаем число как строку
+                    }
+                    mainRepository.speakText("Какую запись требуется удалить? Всего их $countText. Введите 0 для удаления всех.", false)
+                    delay(15000)
+                }
+
+                // Получаем индекс записи для удаления
+                val input = mainRepository.getInput()?.toIntOrNull()
+                if (input == 0) {
+                    // Удаляем все записи
+                    subscriberFiles.forEach { filePathToDelete ->
+                        val fileToDelete = File(filePathToDelete)
+                        if (fileToDelete.exists() && fileToDelete.delete()) {
+                            recordedFiles.remove(filePathToDelete) // Удаляем запись из списка
+                        }
+                    }
+                    mainRepository.speakText("Все записи успешно удалены", false)
+                    mainRepository.setInput("")
+                    return@launch
+                }
+
+                val index = input?.minus(1)
+
+                if (index == null || index < 0 || index >= subscriberFiles.size) {
+                    mainRepository.speakText("Записи с таким номером нет", false)
+                    mainRepository.setInput("")
+                    return@launch
+                }
+
+                // Удаляем выбранное сообщение
+                val filePathToDelete = subscriberFiles[index]
+                val fileToDelete = File(filePathToDelete)
+                if (fileToDelete.exists() && fileToDelete.delete()) {
+                    recordedFiles.removeAt(index) // Удаляем запись из списка
+                    mainRepository.speakText("Запись успешно удалена", false)
+                } else {
+                    mainRepository.speakText("Не удалось удалить запись", false)
+                }
+
+                mainRepository.setInput("")
             }
-            mainRepository.clearRecordedFiles()
-            mainRepository.speakText("Все голосовые записи успешно удалены", false)
+        }
+    }
+
+    // Вспомогательная функция для преобразования числа абонента в текстовое представление
+    private fun getOrdinalNumber(number: Int): String {
+        return when (number) {
+            1 -> "первый"
+            2 -> "второй"
+            3 -> "третий"
+            4 -> "четвертый"
+            else -> "$number" // Если число больше 4, просто возвращаем его как строку
         }
     }
 }

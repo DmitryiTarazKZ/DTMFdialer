@@ -51,10 +51,10 @@ class MainActivity : ComponentActivity() {
             if (intent?.action == Intent.ACTION_HEADSET_PLUG) {
                 val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
                 audioManager.ringerMode = if (intent.getIntExtra("state", 0) == 1) {
-                mainRepository.speakText("Аудио кабель подключен", false)
+                mainRepository.speakText("Соеденение смартфона и радиостанции произведено успешно", false)
                 AudioManager.RINGER_MODE_SILENT
                 } else {
-                mainRepository.speakText("Подключите аудио кабель", false)
+                mainRepository.speakText("Соедените смартфон и радиостанцию", false)
                 AudioManager.RINGER_MODE_NORMAL }
             }
         }
