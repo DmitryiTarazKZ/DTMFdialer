@@ -264,7 +264,7 @@ class Utils(
             31 -> "тридцать первое"
             else -> "$dayOfMonth"
         }
-        mainRepository.speakText("Текущее время $hoursString $minutesString. Сегодня $dayOfWeek, $dayOfMonthString $month",false)
+        mainRepository.speakText("Текущее время $hoursString $minutesString. Сегодня $dayOfWeek, $dayOfMonthString $month")
     }
 
     // Последний пропущенный вызов по команде 0*
@@ -274,7 +274,7 @@ class Utils(
                 Manifest.permission.READ_CALL_LOG
             ) != PackageManager.PERMISSION_GRANTED
         ) {
-            mainRepository.speakText("Не получено разрешение на доступ к информации о последнем пропущенном вызове",false)
+            mainRepository.speakText("Не получено разрешение на доступ к информации о последнем пропущенном вызове")
             mainRepository.setInput("")
             return
         }
@@ -302,12 +302,11 @@ class Utils(
                     mainRepository.speakText(
                         "Последний пропущенный вызов был от абонента $lastMissedCallNumber... он звонил в $lastMissedCallTime... " +
                                 "Если Вы хотите перезвонить, нажмите звездочку. Для отмены нажмите решетку. Также Вы можете " +
-                                "закрепить этот номер за одной из клавиш быстрого набора"
-                        ,false)
+                                "закрепить этот номер за одной из клавиш быстрого набора")
                     mainRepository.setInput("")
                     mainRepository.setInput(number.replace("+7", "8"))
                 } else {
-                    mainRepository.speakText("Не найдено пропущенных вызовов.",false)
+                    mainRepository.speakText("Не найдено пропущенных вызовов.")
                 }
             }
     }
@@ -357,7 +356,7 @@ class Utils(
                             speechRecognizer.cancel()
                             onResult(null)
                             timer.cancel()
-                            mainRepository.speakText("Вы ничего не произнесли.", false)
+                            mainRepository.speakText("Вы ничего не произнесли.")
                         }
                     }
                 }, 0, 1000) // Запускаем таймер с интервалом 1 секунда
@@ -414,7 +413,7 @@ class Utils(
         if (contactNumber != null) {
             scope.launch {
                 val contactName = getContactNameByNumber(contactNumber, context)
-                mainRepository.speakText("Найден контакт $contactName. Нажмите звездочку для вызова или решетку для отмены",false) // Используем имя, как оно записано в телефонной книге
+                mainRepository.speakText("Найден контакт $contactName. Нажмите звездочку для вызова или решетку для отмены") // Используем имя, как оно записано в телефонной книге
                 mainRepository.setInput(contactNumber) // Устанавливаем номер для вызова
                 delay(7000)
             }
@@ -422,9 +421,7 @@ class Utils(
             scope.launch {
                 mainRepository.setInput("")
                 mainRepository.speakText(
-                    "В телефонной книге нет абонента с именем $result. Вы можете добавить этого абонента в вашу телефонную книгу",
-                    false
-                )
+                    "В телефонной книге нет абонента с именем $result. Вы можете добавить этого абонента в вашу телефонную книгу")
             }
         }
     }
@@ -989,7 +986,7 @@ class Utils(
         scope.launch {
             // Проверяем, идет ли уже запись
             if (mainRepository.getIsRecording() == true) {
-                mainRepository.speakText("Запись уже идет. Пожалуйста, остановите текущую запись перед началом новой.", false)
+                mainRepository.speakText("Запись уже идет. Пожалуйста, остановите текущую запись перед началом новой.")
                 return@launch
             }
 
@@ -1002,24 +999,24 @@ class Utils(
             }
 
             if (isTorchOnIs == 111 && subscribers.size > 1) {
-                mainRepository.speakText("Доступны ${subscribers} кому отправить сообщение?", false)
+                mainRepository.speakText("Доступны ${subscribers} кому отправить сообщение?")
                 delay(10000)
 
                 val input = mainRepository.getInput()
                 val selectedSubscriber = input?.toIntOrNull()
 
                 if (selectedSubscriber == null) {
-                    mainRepository.speakText("Вы ничего не ввели", false)
+                    mainRepository.speakText("Вы ничего не ввели")
                     return@launch
                 } else {
                     // Проверяем, доступен ли введенный адресат
                     if (subscribers.contains(selectedSubscriber.toString().first())) {
-                        mainRepository.speakText("Сообщение получит абонент номер $selectedSubscriber, говорите", false)
+                        mainRepository.speakText("Сообщение получит абонент номер $selectedSubscriber, говорите")
                         mainRepository.setInput("")
                         mainRepository.setSelectedSubscriberNumber(selectedSubscriber)
                         delay(5000)
                     } else {
-                        mainRepository.speakText("Абонент номер $selectedSubscriber не доступен", false)
+                        mainRepository.speakText("Абонент номер $selectedSubscriber не доступен")
                         mainRepository.setInput("")
                         return@launch
                     }
@@ -1028,16 +1025,16 @@ class Utils(
             } else {
                 val noteCount = recordedFiles.size
                 if (noteCount == 0) {
-                    mainRepository.speakText("Голосовая запись номер один, можете говорить", false)
+                    mainRepository.speakText("Голосовая запись номер один, можете говорить")
                 } else {
-                    mainRepository.speakText("Голосовая запись номер ${noteCount + 1}, можете говорить", false)
+                    mainRepository.speakText("Голосовая запись номер ${noteCount + 1}, можете говорить",)
                 }
                 delay(6000) // при 5 сек в запись попадают слова можете говорить если нет полной развязки между входом и выходом смартфона
             }
 
             availableMB = getAvailableMemoryInMB()
             if (availableMB < 5) {
-                mainRepository.speakText("В памяти нет места для записи, осталось всего 5 мегабайт. Освободите память", false)
+                mainRepository.speakText("В памяти нет места для записи, осталось всего 5 мегабайт. Освободите память")
                 return@launch
             }
 
@@ -1087,7 +1084,7 @@ class Utils(
                         }
                         fos.write(byteBuffer)
                     } else {
-                        // speakText("Ошибка чтения с буфера", false)
+                        // speakText("Ошибка чтения с буфера")
                     }
                 }
             }
@@ -1122,36 +1119,36 @@ class Utils(
                         } else {
                             "Запись отправлена абоненту с номером ${mainRepository.getSelectedSubscriberNumber()}"
                         }
-                        mainRepository.speakText(message, false)
+                        mainRepository.speakText(message)
                     } else {
                         val message = if (availableMB < 100) {
                             "Запись сохранена. Заканчивается память, осталось $availableMB мегабайт"
                         } else {
                             "Запись сохранена."
                         }
-                        mainRepository.speakText(message, false)
+                        mainRepository.speakText(message)
                     }
 
                     delay(10000)
                     if (mainRepository.getSelectedSubscriberNumber() == 1) {
                         mainRepository.setFrequencyCtcss(203.5)
-                        mainRepository.speakText("Первый, вам поступило голосовое сообщение", false)
+                        mainRepository.speakText("Первый, вам поступило голосовое сообщение")
                     }
                     if (mainRepository.getSelectedSubscriberNumber() == 2) {
                         mainRepository.setFrequencyCtcss(218.1)
-                        mainRepository.speakText("Второй, вам поступило голосовое сообщение", false)
+                        mainRepository.speakText("Второй, вам поступило голосовое сообщение")
                     }
                     if (mainRepository.getSelectedSubscriberNumber() == 3) {
                         mainRepository.setFrequencyCtcss(233.6)
-                        mainRepository.speakText("Третий, вам поступило голосовое сообщение", false)
+                        mainRepository.speakText("Третий, вам поступило голосовое сообщение")
                     }
                     if (mainRepository.getSelectedSubscriberNumber() == 4) {
                         mainRepository.setFrequencyCtcss(250.3)
-                        mainRepository.speakText("Четвертый, вам поступило голосовое сообщение", false)
+                        mainRepository.speakText("Четвертый, вам поступило голосовое сообщение")
                     }
                 }
             } catch (e: IllegalStateException) {
-                mainRepository.speakText("Не удалось остановить запись", false)
+                mainRepository.speakText("Не удалось остановить запись")
             }
         }
     }
@@ -1171,7 +1168,7 @@ class Utils(
                 }
 
                 if (subscriberFiles.isEmpty()) {
-                    mainRepository.speakText("${getOrdinalNumber(abonent)}. У вас нет входящих сообщений", false)
+                    mainRepository.speakText("${getOrdinalNumber(abonent)}. У вас нет входящих сообщений")
                     return@launch
                 } else {
                     // Воспроизводим последнюю запись
@@ -1189,14 +1186,14 @@ class Utils(
                 val specificNoteCount = subscriberFiles.size
 
                 if (specificNoteCount == 0) {
-                    mainRepository.speakText("${getOrdinalNumber(mainRepository.getSelectedSubscriberNumber())}. У вас нет входящих сообщений", false)
+                    mainRepository.speakText("${getOrdinalNumber(mainRepository.getSelectedSubscriberNumber())}. У вас нет входящих сообщений")
                     return@launch
                 } else if (specificNoteCount == 1) {
                     // Если только одно сообщение, воспроизводим его сразу
                     playAudioFile(subscriberFiles[0])
                     return@launch
                 } else {
-                    mainRepository.speakText("${getOrdinalNumber(mainRepository.getSelectedSubscriberNumber())}, у вас $specificNoteCount сообщения. Какое из них требуется воспроизвести?", false)
+                    mainRepository.speakText("${getOrdinalNumber(mainRepository.getSelectedSubscriberNumber())}, у вас $specificNoteCount сообщения. Какое из них требуется воспроизвести?")
                     delay(15000)
                 }
 
@@ -1205,7 +1202,7 @@ class Utils(
                 val index = input?.minus(1)
 
                 if (index == null || index < 0 || index >= subscriberFiles.size) {
-                    mainRepository.speakText("Сообщения с таким номером нет", false)
+                    mainRepository.speakText("Сообщения с таким номером нет")
                     mainRepository.setInput("")
                     return@launch
                 }
@@ -1220,7 +1217,7 @@ class Utils(
                 val specificNoteCount = subscriberFiles.size
 
                 if (specificNoteCount == 0) {
-                    mainRepository.speakText("У вас нет входящих сообщений", false)
+                    mainRepository.speakText("У вас нет входящих сообщений")
                     return@launch
                 } else if (specificNoteCount == 1) {
                     // Если только одно сообщение, воспроизводим его сразу
@@ -1228,15 +1225,15 @@ class Utils(
                     return@launch
                 } else {
                     val countText = if (specificNoteCount == 2) "две" else specificNoteCount.toString()
-                    mainRepository.speakText("Какую запись требуется воспроизвести? Всего их $countText", false)
-                    delay(15000)
+                    mainRepository.speakText("Какую запись требуется воспроизвести? Всего их $countText")
+                    delay(11000)
                 }
 
                 // Получаем индекс записи для воспроизведения
                 val index = mainRepository.getInput()?.toIntOrNull()?.minus(1)
 
                 if (index == null || index < 0 || index >= recordedFiles.size) {
-                    mainRepository.speakText("Записи с таким номером нет", false)
+                    mainRepository.speakText("Записи с таким номером нет")
                     mainRepository.setInput("")
                     return@launch
                 }
@@ -1309,7 +1306,7 @@ class Utils(
                 stopPlayback()
             }
         } else {
-            mainRepository.speakText("Нет записанных файлов", false)
+            mainRepository.speakText("Нет записанных файлов")
         }
     }
 
@@ -1325,12 +1322,12 @@ class Utils(
                 val specificNoteCount = subscriberFiles.size
 
                 if (specificNoteCount == 0) {
-                    mainRepository.speakText("${getOrdinalNumber(mainRepository.getSelectedSubscriberNumber())}. Нет данных для удаления", false)
+                    mainRepository.speakText("${getOrdinalNumber(mainRepository.getSelectedSubscriberNumber())}. Нет данных для удаления")
                     mainRepository.setInput("")
                     return@launch
                 } else {
                     val countText = if (specificNoteCount == 1) "одно" else specificNoteCount.toString()
-                    mainRepository.speakText("${getOrdinalNumber(mainRepository.getSelectedSubscriberNumber())}, у вас $countText сообщения. Какое из них требуется удалить? Введите 0 для удаления всех.", false)
+                    mainRepository.speakText("${getOrdinalNumber(mainRepository.getSelectedSubscriberNumber())}, у вас $countText сообщения. Какое из них требуется удалить? Введите 0 для удаления всех.")
                     delay(15000)
                 }
 
@@ -1344,7 +1341,7 @@ class Utils(
                             recordedFiles.remove(filePathToDelete) // Удаляем запись из списка
                         }
                     }
-                    mainRepository.speakText("Все записи успешно удалены", false)
+                    mainRepository.speakText("Все записи успешно удалены")
                     mainRepository.setInput("")
                     return@launch
                 }
@@ -1352,7 +1349,7 @@ class Utils(
                 val index = input?.minus(1)
 
                 if (index == null || index < 0 || index >= subscriberFiles.size) {
-                    mainRepository.speakText("Записи с таким номером нет", false)
+                    mainRepository.speakText("Записи с таким номером нет")
                     mainRepository.setInput("")
                     return@launch
                 }
@@ -1361,10 +1358,10 @@ class Utils(
                 val filePathToDelete = subscriberFiles[index]
                 val fileToDelete = File(filePathToDelete)
                 if (fileToDelete.exists() && fileToDelete.delete()) {
-                    mainRepository.speakText("Запись успешно удалена", false)
+                    mainRepository.speakText("Запись успешно удалена")
                     recordedFiles.remove(filePathToDelete) // Удаляем запись из списка
                 } else {
-                    mainRepository.speakText("Не удалось удалить запись", false)
+                    mainRepository.speakText("Не удалось удалить запись")
                 }
 
                 mainRepository.setInput("")
@@ -1377,7 +1374,7 @@ class Utils(
                 val specificNoteCount = subscriberFiles.size
 
                 if (specificNoteCount == 0) {
-                    mainRepository.speakText("Нет данных для удаления", false)
+                    mainRepository.speakText("Нет данных для удаления")
                     mainRepository.setInput("")
                     return@launch
                 } else {
@@ -1386,7 +1383,7 @@ class Utils(
                         2 -> "две"
                         else -> specificNoteCount.toString() // Для остальных случаев просто возвращаем число как строку
                     }
-                    mainRepository.speakText("Какую запись требуется удалить? Всего их $countText. Введите 0 для удаления всех.", false)
+                    mainRepository.speakText("Какую запись требуется удалить? Всего их $countText. Введите 0 для удаления всех.")
                     delay(15000)
                 }
 
@@ -1400,7 +1397,7 @@ class Utils(
                             recordedFiles.remove(filePathToDelete) // Удаляем запись из списка
                         }
                     }
-                    mainRepository.speakText("Все записи успешно удалены", false)
+                    mainRepository.speakText("Все записи успешно удалены")
                     mainRepository.setInput("")
                     return@launch
                 }
@@ -1408,7 +1405,7 @@ class Utils(
                 val index = input?.minus(1)
 
                 if (index == null || index < 0 || index >= subscriberFiles.size) {
-                    mainRepository.speakText("Записи с таким номером нет", false)
+                    mainRepository.speakText("Записи с таким номером нет")
                     mainRepository.setInput("")
                     return@launch
                 }
@@ -1418,9 +1415,9 @@ class Utils(
                 val fileToDelete = File(filePathToDelete)
                 if (fileToDelete.exists() && fileToDelete.delete()) {
                     recordedFiles.removeAt(index) // Удаляем запись из списка
-                    mainRepository.speakText("Запись успешно удалена", false)
+                    mainRepository.speakText("Запись успешно удалена")
                 } else {
-                    mainRepository.speakText("Не удалось удалить запись", false)
+                    mainRepository.speakText("Не удалось удалить запись")
                 }
 
                 mainRepository.setInput("")

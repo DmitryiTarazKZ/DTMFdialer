@@ -65,7 +65,10 @@ class MainScreen : Screen {
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .weight(1f)
-                                .height(54.dp)
+                                .height(54.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (screenState.amplitudeCheck1) Color(0xFF2196F3) else Color(0xFFE0E0E0) // Светло-серый цвет
+                            )
                         ) {
                             Text(
                                 modifier = Modifier

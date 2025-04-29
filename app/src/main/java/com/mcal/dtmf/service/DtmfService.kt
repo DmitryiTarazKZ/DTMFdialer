@@ -55,7 +55,7 @@ class DtmfService : Service(), KoinComponent {
         val phoneAccountCount = phoneAccountHandles.size
 
         if (subscriptions == null || subscriptions.isEmpty()) {
-            mainRepository.speakText("В устройстве нет ни одной действующей сим карты. Установите сим карты", false)
+            mainRepository.speakText("В устройстве нет ни одной действующей сим карты. Установите сим карты")
             mainRepository.setInput("")
             return
         }
@@ -84,13 +84,13 @@ class DtmfService : Service(), KoinComponent {
         }
 
         if (slot1 == "Нет сигнала" && slot2 == "Нет сигнала") {
-            mainRepository.speakText("Отсутствует сигнал сотовой сети. Вызов не возможен", false)
+            mainRepository.speakText("Отсутствует сигнал сотовой сети. Вызов не возможен")
             mainRepository.setInput("")
         } else {
             if (phoneAccountCount > 1 && (slot1 != "Нет сигнала" && slot2 != "Нет сигнала")) {
-                if (mainRepository.getSim() == 5) { mainRepository.speakText("Выберите с какой сим карты выполнить вызов", false) }
+                if (mainRepository.getSim() == 5) { mainRepository.speakText("Выберите с какой сим карты выполнить вызов") }
                 if (mainRepository.getSim() == 0 || mainRepository.getSim() == 1) {
-                    mainRepository.speakText("Звоню с  ${if (mainRepository.getSim() == 0) slot1 else slot2}", false)
+                    mainRepository.speakText("Звоню с  ${if (mainRepository.getSim() == 0) slot1 else slot2}")
                     Handler(Looper.getMainLooper()).postDelayed({
                     mainRepository.getInput()?.let { phone ->
                         if (phone.isNotEmpty()) {
@@ -103,18 +103,18 @@ class DtmfService : Service(), KoinComponent {
                                 )
                             }
                             startActivity(intent)
-                        } else mainRepository.speakText("Предотвращен вызов с пустым номером", false)
+                        } else mainRepository.speakText("Предотвращен вызов с пустым номером")
                     }
                     }, 5000) // Задержка в 5000 миллисекунд (5 секунд)
                 }
             } else {
 
                 if (slot1 == "Нет сигнала") {
-                    mainRepository.speakText("Звоню с $slot2}", false)
+                    mainRepository.speakText("Звоню с $slot2}")
                 }
 
                 if (slot2 == "Нет сигнала") {
-                    mainRepository.speakText("Звоню с $slot1}", false)
+                    mainRepository.speakText("Звоню с $slot1}")
                 }
 
                 Handler(Looper.getMainLooper()).postDelayed({
@@ -129,7 +129,7 @@ class DtmfService : Service(), KoinComponent {
                                 )
                             }
                             startActivity(intent)
-                        } else mainRepository.speakText("Предотвращен вызов с пустым номером", false)
+                        } else mainRepository.speakText("Предотвращен вызов с пустым номером")
                     }
                 }, 5000) // Задержка в 5000 миллисекунд (5 секунд)
             }

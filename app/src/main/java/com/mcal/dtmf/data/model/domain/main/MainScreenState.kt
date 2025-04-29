@@ -12,5 +12,6 @@ data class MainScreenState(
     val input: String = "", // Переменная поля ввода
     val key: Char = ' ', // Значение из блока Фурье
     val callState: Int = Call.STATE_DISCONNECTED, // Состояние вызова
-    val amplitudeCheck: Boolean = false // Флаг проверки амплитуды
+    val amplitudeCheck: Boolean = false, // Флаг проверки амплитуды
+    val amplitudeCheck1: Boolean = false // Флаг определения нажатия PTT
 )

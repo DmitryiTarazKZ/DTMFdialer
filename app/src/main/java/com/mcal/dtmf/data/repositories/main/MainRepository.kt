@@ -48,6 +48,10 @@ interface MainRepository {
     fun getAmplitudeCheck(): Boolean?
     fun setAmplitudeCheck(value: Boolean)
 
+    fun getAmplitudeCheck1Flow(): Flow<Boolean>
+    fun getAmplitudeCheck1(): Boolean?
+    fun setAmplitudeCheck1(value: Boolean)
+
     fun getSimFlow(): Flow<Int>
     fun getSim(): Int
     fun setSim(value: Int)
@@ -64,7 +68,7 @@ interface MainRepository {
 
     fun startDtmf()
 
-    fun speakText(text: String, flagVoise: Boolean)
+    fun speakText(text: String)
 
     suspend fun speakSuperTelephone()
 
