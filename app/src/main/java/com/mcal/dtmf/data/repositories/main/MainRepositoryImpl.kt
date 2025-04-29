@@ -81,7 +81,7 @@ class MainRepositoryImpl(
     private var audioRecord: AudioRecord? = null
     private var volumeLevelTts = 80
     private var volumeLevelCall = 80
-    private var amplitudePtt: Double = 100.000
+    private var amplitudePtt: Double = 000.710
     private var isTorchOnIs = 0
     private var isSpeaking = false
     private var lastDialedNumber: String = ""
@@ -465,7 +465,7 @@ class MainRepositoryImpl(
         // Автоматическая остановка записи по отпусканию PTT абонентом
         if (getIsRecording()) {
             playSoundJob.launch {
-                delay(5000)
+                delay(10000)
                 if (!getAmplitudeCheck1() && !isStopRecordingTriggered) {
                     isStopRecordingTriggered = true
                     delay(1000)

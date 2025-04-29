@@ -61,7 +61,7 @@ class Utils(
     private var audioTrack: AudioTrack? = null
     private var isPlaying = false
     private var availableMB = 0L
-    private var audioRecord1: AudioRecord? = null
+    private var audioRecord: AudioRecord? = null
     private var recordedFilePath: String? = null
     private val recordedFiles = mutableListOf<String>()
 
@@ -1053,7 +1053,7 @@ class Utils(
                 fileName
             ).absolutePath // Устанавливаем путь к файлу
 
-            audioRecord1 = AudioRecord(
+            audioRecord = AudioRecord(
                 MediaRecorder.AudioSource.MIC,
                 sampleRate,
                 channelConfig,
@@ -1061,17 +1061,17 @@ class Utils(
                 bufferSize
             )
 
-            if (audioRecord1?.state != AudioRecord.STATE_INITIALIZED) {
+            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
                 return@launch
             }
 
-            audioRecord1?.startRecording()
+            audioRecord?.startRecording()
             mainRepository.setIsRecording(true)
             val buffer = ShortArray(bufferSize)
 
             FileOutputStream(recordedFilePath).use { fos ->
                 while (mainRepository.getIsRecording() == true) {
-                    val readSize = audioRecord1?.read(buffer, 0, buffer.size) ?: 0
+                    val readSize = audioRecord?.read(buffer, 0, buffer.size) ?: 0
                     if (readSize > 0) {
                         val byteBuffer = ByteArray(readSize * 2)
                         for (i in 0 until readSize) {
@@ -1084,14 +1084,14 @@ class Utils(
                         }
                         fos.write(byteBuffer)
                     } else {
-                        // speakText("Ошибка чтения с буфера")
+                        mainRepository.speakText("Ошибка чтения с буфера")
                     }
                 }
             }
 
-            audioRecord1?.stop()
-            audioRecord1?.release()
-            audioRecord1 = null
+            audioRecord?.stop()
+            audioRecord?.release()
+            audioRecord = null
             recordedFiles.add(recordedFilePath!!)
         }
     }
@@ -1108,9 +1108,9 @@ class Utils(
         scope.launch {
             try {
                 if (mainRepository.getIsRecording() == true) {
-                    audioRecord1?.stop()
-                    audioRecord1?.release()
-                    audioRecord1 = null
+                    audioRecord?.stop()
+                    audioRecord?.release()
+                    audioRecord = null
                     mainRepository.setIsRecording(false)
 
                     if (isTorchOnIs == 111  && subscribers.size > 1) {
@@ -1148,7 +1148,7 @@ class Utils(
                     }
                 }
             } catch (e: IllegalStateException) {
-                mainRepository.speakText("Не удалось остановить запись")
+                mainRepository.speakText("Ошибка, не удалось остановить запись")
             }
         }
     }
