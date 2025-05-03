@@ -16,6 +16,7 @@ import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.telecom.Call
+import android.util.Log
 import com.mcal.dtmf.recognizer.DataBlock
 import com.mcal.dtmf.recognizer.Recognizer
 import com.mcal.dtmf.recognizer.Spectrum
@@ -65,6 +66,7 @@ class MainRepositoryImpl(
     private val _isRecording: MutableStateFlow<Boolean?> = MutableStateFlow(null)
     private val _amplitudeCheck: MutableStateFlow<Boolean?> = MutableStateFlow(null)
     private val _amplitudeCheck1: MutableStateFlow<Boolean?> = MutableStateFlow(null)
+    private val _outputFrequency: MutableStateFlow<Float?> = MutableStateFlow(0f)
     private val _sim: MutableStateFlow<Int> = MutableStateFlow(0)
     private val _selectedSubscriberNumber: MutableStateFlow<Int> = MutableStateFlow(0)
     private val _frequencyCtcss: MutableStateFlow<Double> = MutableStateFlow(0.0)
@@ -81,8 +83,8 @@ class MainRepositoryImpl(
     private var audioRecord: AudioRecord? = null
     private var volumeLevelTts = 80
     private var volumeLevelCall = 80
-    private var amplitudePtt: Double = 000.710
-    private var isTorchOnIs = 0
+    private var amplitudePtt: Double = 100.000 // 000.712  Настроена на кенвуд автомобильную
+    private var isTorchOnIs = 5 // Задано 5 чтобы исключить случайное срабатывание (Внимание открытый канал...)
     private var isSpeaking = false
     private var lastDialedNumber: String = ""
     private var voxActivation = 500L
@@ -92,7 +94,8 @@ class MainRepositoryImpl(
     private var numberD = ""
     private var isTorchOn = false
     private var flagVox = false
-    private var flagАmplitude = false
+    private var flagAmplitude = false
+    private var flagFrequency = false
     private var durationVox = 50L
     private var periodVox = 2500L
     private var ton = 0
@@ -102,7 +105,7 @@ class MainRepositoryImpl(
     private var subscribersNumber = 0
     private val subscribers = mutableSetOf<Char>()
     private var isStopRecordingTriggered = false
-    val amplitudeBuffer = mutableListOf<Double>() // Буфер для хранения значений амплитуды
+    private val amplitudeBuffer = mutableListOf<Double>()
 
     init {
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -377,6 +380,30 @@ class MainRepositoryImpl(
         _sim.update { value }
     }
 
+    // получение переменной истинной частоты с блока распознавания
+    override fun getOutputFlow(): Flow<Float> = flow {
+        if (_outputFrequency.value == null) {
+            try {
+                getOutput()
+            } catch (ex: Exception) {
+                ex.printStackTrace()
+            }
+        }
+        emitAll(_outputFrequency.filterNotNull())
+    }
+
+    override fun getOutput(): Float {
+        return _outputFrequency.value ?: 0f
+    }
+
+    override fun setOutput(outputFrequency: Float) {
+        if (flagFrequency) {
+            val formattedFrequensy = String.format("%07.3f", outputFrequency).replace(',', '.') + "Hz"
+            setInput(formattedFrequensy)
+        }
+        _outputFrequency.update { outputFrequency }
+    }
+
     override fun getSelectedSubscriberNumberFlow(): Flow<Int> = flow {
         emitAll(_selectedSubscriberNumber)
     }
@@ -411,7 +438,7 @@ class MainRepositoryImpl(
                         blockingQueue.put(dataBlock)
                         val amplitude = calculateAmplitude(buffer, bufferReadSize)
                         val formattedAmplitude = String.format("%07.3f", amplitude).replace(',', '.')
-                        if (flagАmplitude) {
+                        if (flagAmplitude) {
                             setInput(formattedAmplitude)
                         }
                         val amplitudeValue = formattedAmplitude.toDouble()
@@ -463,16 +490,16 @@ class MainRepositoryImpl(
     override fun clickKey(input: String, key: Char?) {
 
         // Автоматическая остановка записи по отпусканию PTT абонентом
-        if (getIsRecording()) {
-            playSoundJob.launch {
-                delay(10000)
-                if (!getAmplitudeCheck1() && !isStopRecordingTriggered) {
-                    isStopRecordingTriggered = true
-                    delay(1000)
-                    utils.stopRecording(isTorchOnIs, subscribers)
-                }
-            }
-        }
+//        if (getIsRecording()) {
+//            playSoundJob.launch {
+//                delay(10000)
+//                if (!getAmplitudeCheck1() && !isStopRecordingTriggered) {
+//                    isStopRecordingTriggered = true
+//                    delay(1000)
+//                    utils.stopRecording(isTorchOnIs, subscribers)
+//                }
+//            }
+//        }
 
 
         if (key == ' ') {
@@ -790,7 +817,7 @@ class MainRepositoryImpl(
                 else if (input == "45") {
                     if (block) {
                         speakText("Измерение амплитуды входного сигнала включено")
-                        flagАmplitude = true
+                        flagAmplitude = true
                         setInput("")
                     } else  {
                         speakText("Команда заблокирована")
@@ -821,6 +848,17 @@ class MainRepositoryImpl(
                             }
                         }
                     } else {
+                        speakText("Команда заблокирована")
+                        setInput("")
+                    }
+                }
+
+                else if (input == "47") {
+                    if (block) {
+                        speakText("Измерение частоты входного сигнала включено")
+                        flagFrequency = true
+                        setInput("")
+                    } else  {
                         speakText("Команда заблокирована")
                         setInput("")
                     }
@@ -1098,9 +1136,11 @@ class MainRepositoryImpl(
             // Остановка вызова если он есть а если нету то очистка поля ввода
             else if (key == '#') {
 
-                flagАmplitude = false
+                flagAmplitude = false
+                flagFrequency = false
                 textToSpeech.stop()
                 isSpeaking = false
+
                 if (getCall() == null) {
                     setInput("")
 
@@ -1233,7 +1273,7 @@ class MainRepositoryImpl(
                                     subscribers.add('1') // Добавляем абонента, по тону 1000гц
                                     setSelectedSubscriberNumber(1)
                                     if (getFrequencyCtcss() == 203.5) {
-                                            utils.playRecordedFile(isTorchOnIs, subscribers, 1)
+                                        utils.playRecordedFile(isTorchOnIs, subscribers, 1)
                                     } else {
                                         setFrequencyCtcss(203.5) // Субтон для первой радиостанции
                                         speakText("Первый, репитер переключен на тебя")
@@ -1243,7 +1283,7 @@ class MainRepositoryImpl(
                                     subscribers.add('2') // Добавляем абонента, по тону 1450гц
                                     setSelectedSubscriberNumber(2)
                                     if (getFrequencyCtcss() == 218.1) {
-                                            utils.playRecordedFile(isTorchOnIs, subscribers, 2)
+                                        utils.playRecordedFile(isTorchOnIs, subscribers, 2)
                                     } else {
                                         setFrequencyCtcss(218.1) // Субтон для первой радиостанции
                                         speakText("Второй, репитер переключен на тебя")
@@ -1253,7 +1293,7 @@ class MainRepositoryImpl(
                                     subscribers.add('3') // Добавляем абонента, по тону 1750гц
                                     setSelectedSubscriberNumber(3)
                                     if (getFrequencyCtcss() == 233.6) {
-                                            utils.playRecordedFile(isTorchOnIs, subscribers, 3)
+                                        utils.playRecordedFile(isTorchOnIs, subscribers, 3)
                                     } else {
                                         setFrequencyCtcss(233.6) // Субтон для первой радиостанции
                                         speakText("Третий, репитер переключен на тебя")
@@ -1263,7 +1303,7 @@ class MainRepositoryImpl(
                                     subscribers.add('4') // Добавляем абонента, по тону 2100гц
                                     setSelectedSubscriberNumber(4)
                                     if (getFrequencyCtcss() == 250.3) {
-                                            utils.playRecordedFile(isTorchOnIs, subscribers, 4)
+                                        utils.playRecordedFile(isTorchOnIs, subscribers, 4)
                                     } else {
                                         setFrequencyCtcss(250.3) // Субтон для первой радиостанции
                                         speakText("Четвертый, репитер переключен на тебя")
@@ -1277,6 +1317,7 @@ class MainRepositoryImpl(
                            subscribersNumber = 0
                            subscribers.clear()
                            speakText("Внимание открытый канал. Селективный вызов и звуковой отклик отключены")
+                           isTorchOnIs = 5 // Устанавливаем в 5 чтобы исключить самопроизвольное срабатывание данного условия
                         }
                     }
                 }

@@ -56,6 +56,10 @@ interface MainRepository {
     fun getSim(): Int
     fun setSim(value: Int)
 
+    fun getOutputFlow(): Flow<Float>
+    fun getOutput(): Float
+    fun setOutput(outputFrequency: Float)
+
     fun getSelectedSubscriberNumberFlow(): Flow<Int>
     fun getSelectedSubscriberNumber(): Int
     fun setSelectedSubscriberNumber(value: Int)

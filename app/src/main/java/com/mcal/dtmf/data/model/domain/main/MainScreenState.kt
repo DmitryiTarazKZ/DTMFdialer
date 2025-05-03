@@ -13,5 +13,6 @@ data class MainScreenState(
     val key: Char = ' ', // Значение из блока Фурье
     val callState: Int = Call.STATE_DISCONNECTED, // Состояние вызова
     val amplitudeCheck: Boolean = false, // Флаг проверки амплитуды
-    val amplitudeCheck1: Boolean = false // Флаг определения нажатия PTT
+    val amplitudeCheck1: Boolean = false, // Флаг определения нажатия PTT
+    val outputFrequency: Float = 0f // Получение частоты с блока распознавания
 )

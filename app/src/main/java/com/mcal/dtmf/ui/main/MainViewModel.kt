@@ -17,7 +17,8 @@ class MainViewModel(
             key = mainRepository.getKey() ?: ' ',
             input = mainRepository.getInput() ?: "",
             amplitudeCheck = mainRepository.getAmplitudeCheck() ?: false,
-            amplitudeCheck1 = mainRepository.getAmplitudeCheck1() ?: false
+            amplitudeCheck1 = mainRepository.getAmplitudeCheck1() ?: false,
+            outputFrequency = mainRepository.getOutput()
         )
     )
     val screenState = _screenState.asStateFlow()
@@ -57,6 +58,13 @@ class MainViewModel(
             _screenState.update {
                 it.copy(
                     amplitudeCheck1 = value
+                )
+            }
+        }.launchIn(screenModelScope)
+        mainRepository.getOutputFlow().map { value ->
+            _screenState.update {
+                it.copy(
+                    outputFrequency = value
                 )
             }
         }.launchIn(screenModelScope)

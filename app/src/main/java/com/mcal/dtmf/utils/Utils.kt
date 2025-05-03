@@ -28,6 +28,7 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.telephony.SmsManager
+import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.mcal.dtmf.data.repositories.main.MainRepository
@@ -64,6 +65,8 @@ class Utils(
     private var audioRecord: AudioRecord? = null
     private var recordedFilePath: String? = null
     private val recordedFiles = mutableListOf<String>()
+    // Локальный флаг для отслеживания состояния записи
+    var isRecordingLocal = false
 
     companion object {
 
@@ -981,11 +984,12 @@ class Utils(
             // audioTrack = null // Не обнуляйте, если хотите использовать его повторно
         }
     }
+
     // Запись голосового сообщения
     fun startRecording(isTorchOnIs: Int, subscribers: Set<Char>) {
         scope.launch {
             // Проверяем, идет ли уже запись
-            if (mainRepository.getIsRecording() == true) {
+            if (isRecordingLocal) {
                 mainRepository.speakText("Запись уже идет. Пожалуйста, остановите текущую запись перед началом новой.")
                 return@launch
             }
@@ -999,7 +1003,7 @@ class Utils(
             }
 
             if (isTorchOnIs == 111 && subscribers.size > 1) {
-                mainRepository.speakText("Доступны ${subscribers} кому отправить сообщение?")
+                mainRepository.speakText("Доступны $subscribers кому отправить сообщение?")
                 delay(10000)
 
                 val input = mainRepository.getInput()
@@ -1027,7 +1031,7 @@ class Utils(
                 if (noteCount == 0) {
                     mainRepository.speakText("Голосовая запись номер один, можете говорить")
                 } else {
-                    mainRepository.speakText("Голосовая запись номер ${noteCount + 1}, можете говорить",)
+                    mainRepository.speakText("Голосовая запись номер ${noteCount + 1}, можете говорить")
                 }
                 delay(6000) // при 5 сек в запись попадают слова можете говорить если нет полной развязки между входом и выходом смартфона
             }
@@ -1067,11 +1071,12 @@ class Utils(
 
             audioRecord?.startRecording()
             mainRepository.setIsRecording(true)
+            isRecordingLocal = true  // Устанавливаем локальный флаг на true
             val buffer = ShortArray(bufferSize)
 
             FileOutputStream(recordedFilePath).use { fos ->
-                while (mainRepository.getIsRecording() == true) {
-                    val readSize = audioRecord?.read(buffer, 0, buffer.size) ?: 0
+                while (isRecordingLocal) {
+                    val readSize = audioRecord?.read(buffer, 0, buffer.size) ?: -1
                     if (readSize > 0) {
                         val byteBuffer = ByteArray(readSize * 2)
                         for (i in 0 until readSize) {
@@ -1083,37 +1088,39 @@ class Utils(
                             byteBuffer[i * 2 + 1] = (amplifiedSample shr 8 and 0xFF).toByte()
                         }
                         fos.write(byteBuffer)
-                    } else {
+                    } else if (readSize < 0) {
                         mainRepository.speakText("Ошибка чтения с буфера")
+                        break
                     }
                 }
             }
-
-            audioRecord?.stop()
-            audioRecord?.release()
-            audioRecord = null
             recordedFiles.add(recordedFilePath!!)
         }
-    }
-
-    // Функция для получения доступной памяти в мегабайтах
-    fun getAvailableMemoryInMB(): Long {
-        val storageStat = StatFs(context.getExternalFilesDir(null)?.absolutePath)
-        val availableBytes = storageStat.availableBlocksLong * storageStat.blockSizeLong
-        return availableBytes / (1024 * 1024) // Преобразуем байты в мегабайты
     }
 
     // Функция для остановки записи
     fun stopRecording(isTorchOnIs: Int, subscribers: Set<Char>) {
         scope.launch {
             try {
-                if (mainRepository.getIsRecording() == true) {
-                    audioRecord?.stop()
-                    audioRecord?.release()
-                    audioRecord = null
-                    mainRepository.setIsRecording(false)
+                if (isRecordingLocal) {
+                    isRecordingLocal = false
 
-                    if (isTorchOnIs == 111  && subscribers.size > 1) {
+                    // Проверяем, что audioRecord не null и в состоянии инициализации
+                    audioRecord?.let {
+                        try {
+                            it.stop()
+                        } catch (e: IllegalStateException) {
+                            mainRepository.speakText("Ошибка при остановке записи")
+                        } finally {
+                            it.release()
+                            audioRecord = null
+                            mainRepository.setIsRecording(false)
+                        }
+                    } ?: mainRepository.speakText("Аудио рекорд не инициализирован")
+
+
+                    // Дополнительная логика для обработки сообщений
+                    if (isTorchOnIs == 111 && subscribers.size > 1) {
                         val message = if (availableMB < 100) {
                             "Запись отправлена абоненту с номером ${mainRepository.getSelectedSubscriberNumber()}. Заканчивается память, осталось $availableMB мегабайт"
                         } else {
@@ -1130,27 +1137,38 @@ class Utils(
                     }
 
                     delay(10000)
-                    if (mainRepository.getSelectedSubscriberNumber() == 1) {
-                        mainRepository.setFrequencyCtcss(203.5)
-                        mainRepository.speakText("Первый, вам поступило голосовое сообщение")
-                    }
-                    if (mainRepository.getSelectedSubscriberNumber() == 2) {
-                        mainRepository.setFrequencyCtcss(218.1)
-                        mainRepository.speakText("Второй, вам поступило голосовое сообщение")
-                    }
-                    if (mainRepository.getSelectedSubscriberNumber() == 3) {
-                        mainRepository.setFrequencyCtcss(233.6)
-                        mainRepository.speakText("Третий, вам поступило голосовое сообщение")
-                    }
-                    if (mainRepository.getSelectedSubscriberNumber() == 4) {
-                        mainRepository.setFrequencyCtcss(250.3)
-                        mainRepository.speakText("Четвертый, вам поступило голосовое сообщение")
+                    when (mainRepository.getSelectedSubscriberNumber()) {
+                        1 -> {
+                            mainRepository.setFrequencyCtcss(203.5)
+                            mainRepository.speakText("Первый, Вам поступило голосовое сообщение")
+                        }
+                        2 -> {
+                            mainRepository.setFrequencyCtcss(218.1)
+                            mainRepository.speakText("Второй, Вам поступило голосовое сообщение")
+                        }
+                        3 -> {
+                            mainRepository.setFrequencyCtcss(233.6)
+                            mainRepository.speakText("Третий, Вам поступило голосовое сообщение")
+                        }
+                        4 -> {
+                            mainRepository.setFrequencyCtcss(250.3)
+                            mainRepository.speakText("Четвертый, Вам поступило голосовое сообщение")
+                        }
                     }
                 }
             } catch (e: IllegalStateException) {
                 mainRepository.speakText("Ошибка, не удалось остановить запись")
+            } catch (e: Exception) {
+                mainRepository.speakText("Ошибка, остановки записи")
             }
         }
+    }
+
+    // Функция для получения доступной памяти в мегабайтах
+    fun getAvailableMemoryInMB(): Long {
+        val storageStat = StatFs(context.getExternalFilesDir(null)?.absolutePath)
+        val availableBytes = storageStat.availableBlocksLong * storageStat.blockSizeLong
+        return availableBytes / (1024 * 1024) // Преобразуем байты в мегабайты
     }
 
     // Функция для воспроизведения записанного файла
@@ -1183,18 +1201,20 @@ class Utils(
                      file.contains("selective:111") && file.contains("adresat:${mainRepository.getSelectedSubscriberNumber()}")
                 }
 
-                val specificNoteCount = subscriberFiles.size
-
-                if (specificNoteCount == 0) {
-                    mainRepository.speakText("${getOrdinalNumber(mainRepository.getSelectedSubscriberNumber())}. У вас нет входящих сообщений")
-                    return@launch
-                } else if (specificNoteCount == 1) {
-                    // Если только одно сообщение, воспроизводим его сразу
-                    playAudioFile(subscriberFiles[0])
-                    return@launch
-                } else {
-                    mainRepository.speakText("${getOrdinalNumber(mainRepository.getSelectedSubscriberNumber())}, у вас $specificNoteCount сообщения. Какое из них требуется воспроизвести?")
-                    delay(15000)
+                when (val specificNoteCount = subscriberFiles.size) {
+                    0 -> {
+                        mainRepository.speakText("${getOrdinalNumber(mainRepository.getSelectedSubscriberNumber())}. У вас нет входящих сообщений")
+                        return@launch
+                    }
+                    1 -> {
+                        // Если только одно сообщение, воспроизводим его сразу
+                        playAudioFile(subscriberFiles[0])
+                        return@launch
+                    }
+                    else -> {
+                        mainRepository.speakText("${getOrdinalNumber(mainRepository.getSelectedSubscriberNumber())}, у вас $specificNoteCount сообщения. Какое из них требуется воспроизвести?")
+                        delay(15000)
+                    }
                 }
 
                 // Получаем индекс записи для воспроизведения
@@ -1214,19 +1234,21 @@ class Utils(
                     file.contains("selective:0")
                 }
 
-                val specificNoteCount = subscriberFiles.size
-
-                if (specificNoteCount == 0) {
-                    mainRepository.speakText("У вас нет входящих сообщений")
-                    return@launch
-                } else if (specificNoteCount == 1) {
-                    // Если только одно сообщение, воспроизводим его сразу
-                    playAudioFile(recordedFiles[0])
-                    return@launch
-                } else {
-                    val countText = if (specificNoteCount == 2) "две" else specificNoteCount.toString()
-                    mainRepository.speakText("Какую запись требуется воспроизвести? Всего их $countText")
-                    delay(11000)
+                when ( val specificNoteCount = subscriberFiles.size) {
+                    0 -> {
+                        mainRepository.speakText("У вас нет входящих сообщений")
+                        return@launch
+                    }
+                    1 -> {
+                        // Если только одно сообщение, воспроизводим его сразу
+                        playAudioFile(recordedFiles[0])
+                        return@launch
+                    }
+                    else -> {
+                        val countText = if (specificNoteCount == 2) "две" else specificNoteCount.toString()
+                        mainRepository.speakText("Какую запись требуется воспроизвести? Всего их $countText")
+                        delay(11000)
+                    }
                 }
 
                 // Получаем индекс записи для воспроизведения
@@ -1302,9 +1324,8 @@ class Utils(
 
             audioTrack.stop()
             audioTrack.release()
-            if (mainRepository.getFrequencyCtcss() != 0.0) {
-                stopPlayback()
-            }
+            stopPlayback()
+
         } else {
             mainRepository.speakText("Нет записанных файлов")
         }

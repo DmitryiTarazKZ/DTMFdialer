@@ -1,8 +1,11 @@
 package com.mcal.dtmf.recognizer
 
+import com.mcal.dtmf.data.repositories.main.MainRepository
 import org.koin.core.component.KoinComponent
+import org.koin.core.component.inject
 
 class StatelessRecognizer(private val spectrum: Spectrum) : KoinComponent {
+    private val mainRepository: MainRepository by inject() // инжектирование переменной в репозиторий
     // Массив частот и соответствующих символов
     private val tones = listOf(
         Pair(45 to 77, '1'), // DTMF tone for key 1: 1209Hz, 697Hz, continuous
@@ -27,6 +30,7 @@ class StatelessRecognizer(private val spectrum: Spectrum) : KoinComponent {
         val lowMax = getMax(0, 75)
         val highMax = getMax(75, 150)
         val outputFrequency = getMax(0, 500) * 15.625f
+        mainRepository.setOutput(outputFrequency) //передача инжектированной переменной в репозиторий
 
 //        Log.e("Контрольный лог", "Н: $lowMax")
 //        Log.e("Контрольный лог", "В: $highMax")
