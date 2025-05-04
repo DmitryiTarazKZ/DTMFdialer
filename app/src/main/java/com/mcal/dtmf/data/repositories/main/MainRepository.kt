@@ -36,6 +36,10 @@ interface MainRepository {
     fun getInput1(): String?
     fun setInput1(value: String)
 
+    fun getInput2Flow(): Flow<String>
+    fun getInput2(): String?
+    fun setInput2(value: String)
+
     fun getPowerFlow(): Flow<Boolean>
     fun getPower(): Boolean?
     fun setPower(value: Boolean)
@@ -48,17 +52,17 @@ interface MainRepository {
     fun getAmplitudeCheck(): Boolean?
     fun setAmplitudeCheck(value: Boolean)
 
-    fun getAmplitudeCheck1Flow(): Flow<Boolean>
-    fun getAmplitudeCheck1(): Boolean?
-    fun setAmplitudeCheck1(value: Boolean)
-
     fun getSimFlow(): Flow<Int>
     fun getSim(): Int
     fun setSim(value: Int)
 
-    fun getOutputFlow(): Flow<Float>
-    fun getOutput(): Float
-    fun setOutput(outputFrequency: Float)
+    fun getOutputFrequencyFlow(): Flow<Float>
+    fun getOutputFrequency(): Float
+    fun setOutputFrequency(outputFrequency: Float)
+
+    fun getOutputAmplitudeFlow(): Flow<Float>
+    fun getOutputAmplitude(): Float
+    fun setOutputAmplitude(outputAmplitude: Float)
 
     fun getSelectedSubscriberNumberFlow(): Flow<Int>
     fun getSelectedSubscriberNumber(): Int

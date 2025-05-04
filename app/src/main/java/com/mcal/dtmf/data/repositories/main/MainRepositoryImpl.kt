@@ -60,13 +60,14 @@ class MainRepositoryImpl(
     private val _key: MutableStateFlow<Char?> = MutableStateFlow(null)
     private val _input: MutableStateFlow<String?> = MutableStateFlow(null)
     private val _input1: MutableStateFlow<String?> = MutableStateFlow(null)
+    private val _input2: MutableStateFlow<String?> = MutableStateFlow(null)
     private val _call: MutableStateFlow<Call?> = MutableStateFlow(null)
     private val _callState: MutableStateFlow<Int> = MutableStateFlow(Call.STATE_DISCONNECTED)
     private val _powerState: MutableStateFlow<Boolean?> = MutableStateFlow(null)
     private val _isRecording: MutableStateFlow<Boolean?> = MutableStateFlow(null)
     private val _amplitudeCheck: MutableStateFlow<Boolean?> = MutableStateFlow(null)
-    private val _amplitudeCheck1: MutableStateFlow<Boolean?> = MutableStateFlow(null)
     private val _outputFrequency: MutableStateFlow<Float?> = MutableStateFlow(0f)
+    private val _outputAmplitude: MutableStateFlow<Float?> = MutableStateFlow(0f)
     private val _sim: MutableStateFlow<Int> = MutableStateFlow(0)
     private val _selectedSubscriberNumber: MutableStateFlow<Int> = MutableStateFlow(0)
     private val _frequencyCtcss: MutableStateFlow<Double> = MutableStateFlow(0.0)
@@ -83,7 +84,7 @@ class MainRepositoryImpl(
     private var audioRecord: AudioRecord? = null
     private var volumeLevelTts = 80
     private var volumeLevelCall = 80
-    private var amplitudePtt: Double = 100.000 // 000.712  Настроена на кенвуд автомобильную
+    private var amplitudePtt: Double = 150.000
     private var isTorchOnIs = 5 // Задано 5 чтобы исключить случайное срабатывание (Внимание открытый канал...)
     private var isSpeaking = false
     private var lastDialedNumber: String = ""
@@ -96,16 +97,17 @@ class MainRepositoryImpl(
     private var flagVox = false
     private var flagAmplitude = false
     private var flagFrequency = false
+    private var flagDoobleClic = 0
     private var durationVox = 50L
     private var periodVox = 2500L
     private var ton = 0
+    private var pruning = 1000 // Значение обрезки зукового файла
     private var block = false
 
 
     private var subscribersNumber = 0
     private val subscribers = mutableSetOf<Char>()
     private var isStopRecordingTriggered = false
-    private val amplitudeBuffer = mutableListOf<Double>()
 
     init {
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -285,6 +287,25 @@ class MainRepositoryImpl(
         _input1.update { value }
     }
 
+    override fun getInput2Flow(): Flow<String> = flow {
+        if (_input1.value == null) {
+            try {
+                getInput2()
+            } catch (ex: Exception) {
+                ex.printStackTrace()
+            }
+        }
+        emitAll(_input.filterNotNull())
+    }
+
+    override fun getInput2(): String? {
+        return _input2.value
+    }
+
+    override fun setInput2(value: String) {
+        _input2.update { value }
+    }
+
     override fun getPowerFlow(): Flow<Boolean> = flow {
         if (_powerState.value == null) {
             try {
@@ -349,25 +370,6 @@ class MainRepositoryImpl(
         _amplitudeCheck.update { value }
     }
 
-    override fun getAmplitudeCheck1Flow(): Flow<Boolean> = flow {
-        if (_amplitudeCheck1.value == null) {
-            try {
-                getPower()
-            } catch (ex: Exception) {
-                ex.printStackTrace()
-            }
-        }
-        emitAll(_amplitudeCheck1.filterNotNull())
-    }
-
-    override fun getAmplitudeCheck1(): Boolean {
-        return _amplitudeCheck1.value ?: true
-    }
-
-    override fun setAmplitudeCheck1(value: Boolean) {
-        _amplitudeCheck1.update { value }
-    }
-
     override fun getSimFlow(): Flow<Int> = flow {
         emitAll(_sim)
     }
@@ -381,10 +383,10 @@ class MainRepositoryImpl(
     }
 
     // получение переменной истинной частоты с блока распознавания
-    override fun getOutputFlow(): Flow<Float> = flow {
+    override fun getOutputFrequencyFlow(): Flow<Float> = flow {
         if (_outputFrequency.value == null) {
             try {
-                getOutput()
+                getOutputFrequency()
             } catch (ex: Exception) {
                 ex.printStackTrace()
             }
@@ -392,16 +394,65 @@ class MainRepositoryImpl(
         emitAll(_outputFrequency.filterNotNull())
     }
 
-    override fun getOutput(): Float {
+    override fun getOutputFrequency(): Float {
         return _outputFrequency.value ?: 0f
     }
 
-    override fun setOutput(outputFrequency: Float) {
+    override fun setOutputFrequency(outputFrequency: Float) {
         if (flagFrequency) {
             val formattedFrequensy = String.format("%07.3f", outputFrequency).replace(',', '.') + "Hz"
             setInput(formattedFrequensy)
         }
         _outputFrequency.update { outputFrequency }
+    }
+
+    // получение амплитуды с микрофона
+    override fun getOutputAmplitudeFlow(): Flow<Float> = flow {
+        if (_outputAmplitude.value == null) {
+            try {
+                getOutputAmplitude()
+            } catch (ex: Exception) {
+                ex.printStackTrace()
+            }
+        }
+        emitAll(_outputAmplitude.filterNotNull())
+    }
+
+    override fun getOutputAmplitude(): Float {
+        return _outputAmplitude.value ?: 0f
+    }
+
+    override fun setOutputAmplitude(outputAmplitude: Float) {
+        Log.d("Контрольный лог", "АЬПЛИТУДА: $outputAmplitude")
+        if (flagAmplitude) {
+            val formattedAmplitude = String.format("%07.3f", outputAmplitude).replace(',', '.')
+            setInput(formattedAmplitude)
+        }
+
+        // Автоматическая остановка записи по отпусканию PTT абонентом или если он замолчит
+        if (getIsRecording()) {
+            playSoundJob.launch {
+                var noExceedDuration = 0L
+                while (getIsRecording()) {
+                    if (getOutputAmplitude().toDouble() >= amplitudePtt) {
+                        noExceedDuration = 0
+                    } else {
+                        noExceedDuration += 100
+                    }
+                    // если в течении этого времени амплитуда не превышала порог останавливаем запись
+                    if (noExceedDuration >= 7000 && !isStopRecordingTriggered) {
+                        isStopRecordingTriggered = true
+                        delay(1000)
+                        pruning = 7700 // Обрезаем 8 секунд для того чтобы не было слышно как абонент отпустил PTT
+                        utils.stopRecording(isTorchOnIs, subscribers, pruning)
+                        break
+                    }
+                    delay(100) // Проверяем каждые 100 мс
+                }
+            }
+        }
+
+        _outputAmplitude.update { outputAmplitude }
     }
 
     override fun getSelectedSubscriberNumberFlow(): Flow<Int> = flow {
@@ -437,17 +488,7 @@ class MainRepositoryImpl(
                         val dataBlock = DataBlock(buffer, blockSize, bufferReadSize)
                         blockingQueue.put(dataBlock)
                         val amplitude = calculateAmplitude(buffer, bufferReadSize)
-                        val formattedAmplitude = String.format("%07.3f", amplitude).replace(',', '.')
-                        if (flagAmplitude) {
-                            setInput(formattedAmplitude)
-                        }
-                        val amplitudeValue = formattedAmplitude.toDouble()
-                        amplitudeBuffer.add(amplitudeValue)
-                        if (amplitudeBuffer.size >= 10) {
-                            val averageAmplitude = amplitudeBuffer.average()
-                            setAmplitudeCheck1(amplitudePtt <= averageAmplitude)
-                            amplitudeBuffer.clear()
-                        }
+                        setOutputAmplitude(amplitude.toFloat())
 
                         val currentAmplitudeCheck = amplitude > 0
                         if (currentAmplitudeCheck != previousAmplitudeCheck) {
@@ -488,19 +529,6 @@ class MainRepositoryImpl(
 
     //Основной блок обработки нажатий клавиш
     override fun clickKey(input: String, key: Char?) {
-
-        // Автоматическая остановка записи по отпусканию PTT абонентом
-//        if (getIsRecording()) {
-//            playSoundJob.launch {
-//                delay(10000)
-//                if (!getAmplitudeCheck1() && !isStopRecordingTriggered) {
-//                    isStopRecordingTriggered = true
-//                    delay(1000)
-//                    utils.stopRecording(isTorchOnIs, subscribers)
-//                }
-//            }
-//        }
-
 
         if (key == ' ') {
             val cameraId = cameraManager.cameraIdList[0]
@@ -625,8 +653,26 @@ class MainRepositoryImpl(
 
             else if (key == '*') {
 
-                if (input == "") {
-                   speakText("Наберите номер")
+                if (flagDoobleClic == 0 || flagDoobleClic == 1) {
+                    playSoundJob.launch {
+                        flagDoobleClic++
+                        delay(1500) // Время в течение которого надо выполнить одинарный или двойной клик
+                        if (input == "" && flagDoobleClic == 1) {
+                            speakText("Наберите номер")
+                            flagDoobleClic = 0
+                        }
+                        if (input == "" && flagDoobleClic == 2) {
+                            if (getInput2() != null) {
+                                setInput(getInput2().toString())
+                                if (getSim() == 5) setSim(0) // Сразу звонок с той сим карты с которой звонили последний раз
+                                DtmfService.callStart(context)
+                                flagDoobleClic = 0
+                            } else {
+                                speakText("Вначале выполните звонок")
+                                flagDoobleClic = 0
+                            }
+                        }
+                    }
                 }
 
                 // Прием входящего вызова по нажатию звездочки
@@ -1014,6 +1060,7 @@ class MainRepositoryImpl(
                     setSim(5)
                     DtmfService.callStart(context)
                     setInput1(getInput().toString())
+                    setInput2(getInput().toString())
                 }
             }
 
@@ -1136,6 +1183,7 @@ class MainRepositoryImpl(
             // Остановка вызова если он есть а если нету то очистка поля ввода
             else if (key == '#') {
 
+                flagDoobleClic = 0
                 flagAmplitude = false
                 flagFrequency = false
                 textToSpeech.stop()
@@ -1245,7 +1293,8 @@ class MainRepositoryImpl(
 
                     else if (!isSpeaking) {
                         if (getIsRecording()) {
-                            utils.stopRecording(isTorchOnIs, subscribers)
+                            pruning = 800 // Обрезаем последюю секунду чтобы потом не было слышно завершающего DTMF тона решетки
+                            utils.stopRecording(isTorchOnIs, subscribers, pruning)
                         } else speakText("Номеронабиратель, очищен")
                     }
                 } else {
@@ -1416,9 +1465,11 @@ class MainRepositoryImpl(
             val utteranceId = System.currentTimeMillis().toString()
 
             CoroutineScope(Dispatchers.Main).launch {
-                if (text != "Один. Два. Три. Четыре. Пять. Поверка работоспособности вокс системы. Шесть. Семь. Восемь. Девять. Десять") {
+                if (text == "Наберите номер") {
+                utils.voxActivation(0, voxActivation) { textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId) }
+                } else if (text != "Один. Два. Три. Четыре. Пять. Поверка работоспособности вокс системы. Шесть. Семь. Восемь. Девять. Десять") {
                     utils.voxActivation(1500, voxActivation) { textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId) }
-                } else {
+                }  else {
                     delay(1500)
                     textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
                 }

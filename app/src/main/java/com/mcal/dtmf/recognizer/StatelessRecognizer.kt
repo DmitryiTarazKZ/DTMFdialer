@@ -30,7 +30,7 @@ class StatelessRecognizer(private val spectrum: Spectrum) : KoinComponent {
         val lowMax = getMax(0, 75)
         val highMax = getMax(75, 150)
         val outputFrequency = getMax(0, 500) * 15.625f
-        mainRepository.setOutput(outputFrequency) //передача инжектированной переменной в репозиторий
+        mainRepository.setOutputFrequency(outputFrequency) //передача инжектированной переменной в репозиторий
 
 //        Log.e("Контрольный лог", "Н: $lowMax")
 //        Log.e("Контрольный лог", "В: $highMax")

@@ -67,7 +67,7 @@ class MainScreen : Screen {
                                 .weight(1f)
                                 .height(54.dp),
                             colors = CardDefaults.cardColors(
-                                containerColor = if (screenState.amplitudeCheck1) Color(0xFF2196F3) else Color(0xFFE0E0E0) // Светло-серый цвет
+                                containerColor = if (screenState.isRecording) Color(0xFFE72929) else Color(0xFFE0E0E0) // Светло-серый цвет
                             )
                         ) {
                             Text(
