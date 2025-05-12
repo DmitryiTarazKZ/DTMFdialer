@@ -20,6 +20,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.BatteryManager
+import android.os.Build
 import android.os.Bundle
 import android.os.StatFs
 import android.provider.CallLog
@@ -28,7 +29,6 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.telephony.SmsManager
-import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.mcal.dtmf.data.repositories.main.MainRepository
@@ -65,9 +65,7 @@ class Utils(
     private var audioRecord: AudioRecord? = null
     private var recordedFilePath: String? = null
     private val recordedFiles = mutableListOf<String>()
-    // Локальный флаг для отслеживания состояния записи
     private var isRecordingLocal = false
-    private var deleteSec = 1000
 
     companion object {
 
@@ -1178,7 +1176,8 @@ class Utils(
     fun getAvailableMemoryInMB(): Long {
         val storageStat = StatFs(context.getExternalFilesDir(null)?.absolutePath)
         val availableBytes = storageStat.availableBlocksLong * storageStat.blockSizeLong
-        return availableBytes / (1024 * 1024) // Преобразуем байты в мегабайты
+        val availableMB = availableBytes / (1024 * 1024) // Преобразуем байты в мегабайты
+        return availableMB
     }
 
     // Функция для воспроизведения записанного файла
@@ -1234,7 +1233,7 @@ class Utils(
             }
 
             // Вспомогательная функция: взять файл по индексу, извлечь deleteSec и запустить плеер
-            suspend fun playByIndex(idx: Int) {
+            fun playByIndex(idx: Int) {
                 val file = files[idx]
                 val pruning = extractPruning(file)
                 playAudioFile(file, pruning)

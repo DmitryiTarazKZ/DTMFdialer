@@ -11,12 +11,12 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.net.Uri
+import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.telecom.Call
-import android.util.Log
 import com.mcal.dtmf.recognizer.DataBlock
 import com.mcal.dtmf.recognizer.Recognizer
 import com.mcal.dtmf.recognizer.Spectrum
@@ -423,7 +423,6 @@ class MainRepositoryImpl(
     }
 
     override fun setOutputAmplitude(outputAmplitude: Float) {
-        Log.d("Контрольный лог", "АЬПЛИТУДА: $outputAmplitude")
         if (flagAmplitude) {
             val formattedAmplitude = String.format("%07.3f", outputAmplitude).replace(',', '.')
             setInput(formattedAmplitude)
@@ -653,25 +652,30 @@ class MainRepositoryImpl(
 
             else if (key == '*') {
 
-                if (flagDoobleClic == 0 || flagDoobleClic == 1) {
+                // Функция, где обрабатываются одиночные/двойные клики:
+                if (flagDoobleClic in 0..1) {
                     playSoundJob.launch {
                         flagDoobleClic++
-                        delay(1500) // Время в течение которого надо выполнить одинарный или двойной клик
-                        if (input == "" && flagDoobleClic == 1) {
-                            speakText("Наберите номер")
-                            flagDoobleClic = 0
-                        }
-                        if (input == "" && flagDoobleClic == 2) {
-                            if (getInput2() != null) {
-                                setInput(getInput2().toString())
-                                if (getSim() == 5) setSim(0) // Сразу звонок с той сим карты с которой звонили последний раз
-                                DtmfService.callStart(context)
-                                flagDoobleClic = 0
-                            } else {
-                                speakText("Вначале выполните звонок")
-                                flagDoobleClic = 0
+                        delay(1500) // время для определения одинарного или двойного клика
+                        when {
+                            // одинарный клик
+                            input.isEmpty() && flagDoobleClic == 1 -> {
+                                speakText("Наберите номер")
+                            }
+                            // двойной клик
+                            input.isEmpty() && flagDoobleClic == 2 -> {
+                                val secondInput = getInput2()
+                                // проверяем не только на null, но и на пустую строку
+                                if (!secondInput.isNullOrBlank()) {
+                                    setInput(secondInput.toString())
+                                    if (getSim() == 5) setSim(0) // звонок с последней использованной SIM
+                                    DtmfService.callStart(context)
+                                } else {
+                                    speakText("Вначале выполните звонок")
+                                }
                             }
                         }
+                        flagDoobleClic = 0
                     }
                 }
 
@@ -697,7 +701,7 @@ class MainRepositoryImpl(
                 // Удаленный контроль температуры и заряда аккумулятора по команде 2*
                 else if (input == "2" && getCall() == null) {
                     val (temperatureText, levelText) = batteryStatus(context)
-                    speakText("Температура батареи $temperatureText. Заряд батареи $levelText. Зарядное устройство: ${if (getPower()) "Подключено. " else "Не подключено. "} ")
+                    speakText("Температура батареи смартфона $temperatureText. Заряд батареи $levelText. Батарея смартфона: ${if (getPower()) "Заряжается. " else "Разряжается. Расходуйте заряд экономно"} ")
                     setInput("")
                 }
 
@@ -723,17 +727,20 @@ class MainRepositoryImpl(
                 // Проверка свободной памяти 9999*
                 else if (input == "9999" && getCall() == null) {
                     val mb = utils.getAvailableMemoryInMB()
+                    val androidVersion = Build.VERSION.RELEASE
+                    val sdkVersion = Build.VERSION.SDK_INT
+
                     val memoryMessage = if (mb > 1000) {
-                        "Объем свободной памяти составляет ${mb / 1024} гигабайта" // Преобразуем в ГБ
+                        "Объем свободной памяти составляет ${mb / 1024} гигабайта. Версия андроид $androidVersion. Версия сдк $sdkVersion"
                     } else {
-                        "Объем свободной памяти составляет $mb мегабайт"
+                        "Объем свободной памяти составляет $mb мегабайт. Версия андроид $androidVersion. Версия сдк $sdkVersion"
                     }
                     speakText(memoryMessage)
                     setInput("")
                 }
 
                 // Голосовой поиск абонента в телефонной книге по команде 5*
-                else if (input == "5" && getCall() == null) {
+                else if ((input == "5" && getCall() == null) && !getIsRecording()) { // Блокируем команду если идет запись голосовой заметки
                     playSoundJob.launch {
                         if (utils.isOnline(context)) {
                             speakText("Назовите имя абонента которому вы хотите позвонить")
@@ -916,7 +923,7 @@ class MainRepositoryImpl(
                         playSoundJob.launch {
                             speakText("Внимание! Прямой ввод частоты субтона репитера. Введите частоту")
                             setInput("")
-                            delay(10000)
+                            delay(20000)
                             val userInput = getInput()
                             if (userInput != null && userInput.length > 4) {
                                 speakText("Введите не более 4 цифр")
@@ -1094,7 +1101,7 @@ class MainRepositoryImpl(
                 }
 
                 // Отправка надиктованного сообщения на набранный номер
-                else if (key == '4' && getCall() == null) {
+                else if ((key == '4' && getCall() == null) && !getIsRecording()) { // Блокируем команду если идет запись голосовой заметки
                     playSoundJob.launch {
                         if (utils.isOnline(context)) {
                             speakText("Произнесите сообщение, которое вы хотите отправить на этот номер")
@@ -1141,7 +1148,7 @@ class MainRepositoryImpl(
                 }
 
                 // Добавление контакта в телефонную книгу
-                else if (key == '5' && getCall() == null) {
+                else if ((key == '5' && getCall() == null) && !getIsRecording()) { // Блокируем команду если идет запись голосовой заметки
                     playSoundJob.launch {
                         if (utils.isOnline(context)) {
                             speakText("Произнесите фамилию и имя абонента, которого Вы хотите добавить в телефонную книгу")
@@ -1188,12 +1195,13 @@ class MainRepositoryImpl(
                 flagFrequency = false
                 textToSpeech.stop()
                 isSpeaking = false
+                setInput2("")
 
                 if (getCall() == null) {
                     setInput("")
 
                     // Голосовой поиск абонента в телефонной книге по команде 5# с последующим удалением
-                    if (input == "5" && getCall() == null) {
+                    if ((input == "5" && getCall() == null) && !getIsRecording()) { // Блокируем команду если идет запись голосовой заметки
                         playSoundJob.launch {
                             if (utils.isOnline(context)) {
                                 speakText("Назовите фамилию и имя абонента которого вы хотите удалить с телефонной книги")
@@ -1309,13 +1317,14 @@ class MainRepositoryImpl(
                         cameraManager.setTorchMode(cameraId, true)
                         isTorchOn = true
 
-                        // Проверка на селективный вызов
+
                         if (getInput() == "000" || getInput() == "111" || getInput() == "555") {
                             getInput()?.toIntOrNull()?.let {
                                 isTorchOnIs = it
                             }
                         }
 
+                        // Проверка на селективный вызов
                         if (isTorchOnIs == 111) {
                             when (key) {
                                 'R' -> {
