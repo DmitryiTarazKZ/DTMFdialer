@@ -10,6 +10,7 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.media.ToneGenerator
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
@@ -100,8 +101,11 @@ class MainRepositoryImpl(
     private var flagVox = false
     private var flagAmplitude = false
     private var flagFrequency = false
+    private var flagDtmf = false
+    private var dtmfPlaying = false
+    private var lastKeyPressTime: Long = 0
     private var flagDoobleClic = 0
-    private var durationVox = 50L
+    private var durationVox = 300L
     private var periodVox = 2500L
     private var ton = 0
     private var pruning = 1000 // Значение обрезки зукового файла
@@ -623,8 +627,44 @@ class MainRepositoryImpl(
 
         if (key != ' ' && key != previousKey) {
 
+            if (flagDtmf && !dtmfPlaying) {
+                val currentTime = System.currentTimeMillis()
+
+                // Проверяем, прошло ли больше 1 секунды с последнего нажатия
+                if (currentTime - lastKeyPressTime > 1000) {
+                    val tone = when (key) {
+                        '0' -> ToneGenerator.TONE_DTMF_0
+                        '1' -> ToneGenerator.TONE_DTMF_1
+                        '2' -> ToneGenerator.TONE_DTMF_2
+                        '3' -> ToneGenerator.TONE_DTMF_3
+                        '4' -> ToneGenerator.TONE_DTMF_4
+                        '5' -> ToneGenerator.TONE_DTMF_5
+                        '6' -> ToneGenerator.TONE_DTMF_6
+                        '7' -> ToneGenerator.TONE_DTMF_7
+                        '8' -> ToneGenerator.TONE_DTMF_8
+                        '9' -> ToneGenerator.TONE_DTMF_9
+                        'A' -> ToneGenerator.TONE_DTMF_A
+                        'B' -> ToneGenerator.TONE_DTMF_B
+                        'C' -> ToneGenerator.TONE_DTMF_C
+                        'D' -> ToneGenerator.TONE_DTMF_D
+                        else -> null // Если клавиша не соответствует DTMF
+                    }
+
+                    tone?.let {
+                        playSoundJob.launch {
+                            dtmfPlaying = true // Устанавливаем флаг, что DTMF тон проигрывается
+                            lastKeyPressTime = currentTime // Обновляем время последнего нажатия
+                            utils.playDtmfTone(it, 1000, durationVox)
+                            delay(1000)
+                            dtmfPlaying = false // Сбрасываем флаг
+                            setInput("")
+                        }
+                    }
+                }
+            }
+
             // Обработка нажатий клавиш быстрого набора
-            if ((key in 'A'..'D' && getCall() == null) && !getFlagFrequencyLowHigt()) {
+            if ((key in 'A'..'D' && getCall() == null) && (!getFlagFrequencyLowHigt() && !flagDtmf)) {
                 playSoundJob.launch {
                     delay(200)
                     val currentNumber = when (key) {
@@ -996,6 +1036,17 @@ class MainRepositoryImpl(
                     }
                 }
 
+                else if (input == "49") {
+                    if (block) {
+                        speakText("Генерация двухтональных команд включена")
+                        flagDtmf = true
+                        setInput("")
+                    } else  {
+                        speakText("Команда заблокирована")
+                        setInput("")
+                    }
+                }
+
                 // Прямой ввод частоты субтонов
                 else if (input == "58") {
                     if (getCall() == null && block) {
@@ -1142,7 +1193,7 @@ class MainRepositoryImpl(
                 }
 
                 // Блок выполнения исходящего вызова по нажатию звездочки
-                else if ((getCall() == null && input.length in 3..11) && !getFlagFrequencyLowHigt()) {
+                else if ((getCall() == null && input.length in 3..11) && (!getFlagFrequencyLowHigt() && !flagDtmf)) {
                     setSim(5)
                     DtmfService.callStart(context)
                     setInput1(getInput().toString())
@@ -1273,6 +1324,7 @@ class MainRepositoryImpl(
                 flagAmplitude = false
                 flagFrequency = false
                 setFlagFrequencyLowHigt(false)
+                flagDtmf = false
                 textToSpeech.stop()
                 isSpeaking = false
                 setInput2("")
