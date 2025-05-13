@@ -66,7 +66,10 @@ class MainRepositoryImpl(
     private val _powerState: MutableStateFlow<Boolean?> = MutableStateFlow(null)
     private val _isRecording: MutableStateFlow<Boolean?> = MutableStateFlow(null)
     private val _amplitudeCheck: MutableStateFlow<Boolean?> = MutableStateFlow(null)
+    private val _flagFrequencyLowHigt: MutableStateFlow<Boolean?> = MutableStateFlow(null)
     private val _outputFrequency: MutableStateFlow<Float?> = MutableStateFlow(0f)
+    private val _outputFrequencyLow: MutableStateFlow<Float?> = MutableStateFlow(0f)
+    private val _outputFrequencyHigh: MutableStateFlow<Float?> = MutableStateFlow(0f)
     private val _outputAmplitude: MutableStateFlow<Float?> = MutableStateFlow(0f)
     private val _sim: MutableStateFlow<Int> = MutableStateFlow(0)
     private val _selectedSubscriberNumber: MutableStateFlow<Int> = MutableStateFlow(0)
@@ -324,10 +327,10 @@ class MainRepositoryImpl(
     override fun setPower(value: Boolean) {
         val previousValue = _powerState.value
         if (previousValue == true && !value) {
-            speakText("Внимание! Произошло отключение питания. Устройство работает от собственного аккумулятора")
+            speakText("Внимание! Произошло отключение питания. Смартфон работает от собственного аккумулятора")
         }
         if (previousValue == false && value) {
-            speakText("Питание устройства возобновлено. Аккумулятор заряжается")
+            speakText("Питание устройства возобновлено. Аккумулятор смартфона заряжается")
         }
         _powerState.update { value }
     }
@@ -370,6 +373,25 @@ class MainRepositoryImpl(
         _amplitudeCheck.update { value }
     }
 
+    override fun getFlagFrequencyLowHigtFlow(): Flow<Boolean> = flow {
+        if (_flagFrequencyLowHigt.value == null) {
+            try {
+                getPower()
+            } catch (ex: Exception) {
+                ex.printStackTrace()
+            }
+        }
+        emitAll(_flagFrequencyLowHigt.filterNotNull())
+    }
+
+    override fun getFlagFrequencyLowHigt(): Boolean {
+        return _flagFrequencyLowHigt.value ?: false
+    }
+
+    override fun setFlagFrequencyLowHigt(value: Boolean) {
+        _flagFrequencyLowHigt.update { value }
+    }
+
     override fun getSimFlow(): Flow<Int> = flow {
         emitAll(_sim)
     }
@@ -406,6 +428,52 @@ class MainRepositoryImpl(
         _outputFrequency.update { outputFrequency }
     }
 
+    // получение переменной НИЖНЕЙ частоты с блока распознавания
+    override fun getOutputFrequencyLowFlow(): Flow<Float> = flow {
+        if (_outputFrequencyLow.value == null) {
+            try {
+                getOutputFrequencyLow()
+            } catch (ex: Exception) {
+                ex.printStackTrace()
+            }
+        }
+        emitAll(_outputFrequencyLow.filterNotNull())
+    }
+
+    override fun getOutputFrequencyLow(): Float {
+        return _outputFrequencyLow.value ?: 0f
+    }
+
+    override fun setOutputFrequencyLow(outputFrequencyLow: Float) {
+        // Используем функцию подмены
+        val frequencyToUpdate = substituteFrequencyLow(outputFrequencyLow)
+        // Обновляем значение
+        _outputFrequencyLow.update { frequencyToUpdate }
+    }
+
+    // получение переменной ВЕРХНЕЙ частоты с блока распознавания
+    override fun getOutputFrequencyHighFlow(): Flow<Float> = flow {
+        if (_outputFrequencyHigh.value == null) {
+            try {
+                getOutputFrequencyHigh()
+            } catch (ex: Exception) {
+                ex.printStackTrace()
+            }
+        }
+        emitAll(_outputFrequencyHigh.filterNotNull())
+    }
+
+    override fun getOutputFrequencyHigh(): Float {
+        return _outputFrequencyHigh.value ?: 0f
+    }
+
+    override fun setOutputFrequencyHigh(outputFrequencyHigh: Float) {
+        // Используем функцию подмены
+        val frequencyToUpdate = substituteFrequencyHigh(outputFrequencyHigh)
+        // Обновляем значение
+        _outputFrequencyHigh.update { frequencyToUpdate }
+    }
+
     // получение амплитуды с микрофона
     override fun getOutputAmplitudeFlow(): Flow<Float> = flow {
         if (_outputAmplitude.value == null) {
@@ -438,7 +506,7 @@ class MainRepositoryImpl(
                     } else {
                         noExceedDuration += 100
                     }
-                    // если в течении этого времени амплитуда не превышала порог останавливаем запись
+                    // если в течении этого времени (7 сек) амплитуда не превышала порог останавливаем запись
                     if (noExceedDuration >= 7000 && !isStopRecordingTriggered) {
                         isStopRecordingTriggered = true
                         delay(1000)
@@ -556,7 +624,7 @@ class MainRepositoryImpl(
         if (key != ' ' && key != previousKey) {
 
             // Обработка нажатий клавиш быстрого набора
-            if (key in 'A'..'D' && getCall() == null) {
+            if ((key in 'A'..'D' && getCall() == null) && !getFlagFrequencyLowHigt()) {
                 playSoundJob.launch {
                     delay(200)
                     val currentNumber = when (key) {
@@ -917,6 +985,17 @@ class MainRepositoryImpl(
                     }
                 }
 
+                else if (input == "48") {
+                    if (block) {
+                        speakText("Измерение нижней и верхней частоты двухтонального набора включено")
+                        setFlagFrequencyLowHigt(true)
+                        setInput("")
+                    } else  {
+                        speakText("Команда заблокирована")
+                        setInput("")
+                    }
+                }
+
                 // Прямой ввод частоты субтонов
                 else if (input == "58") {
                     if (getCall() == null && block) {
@@ -1063,7 +1142,7 @@ class MainRepositoryImpl(
                 }
 
                 // Блок выполнения исходящего вызова по нажатию звездочки
-                else if (getCall() == null && input.length in 3..11) {
+                else if ((getCall() == null && input.length in 3..11) && !getFlagFrequencyLowHigt()) {
                     setSim(5)
                     DtmfService.callStart(context)
                     setInput1(getInput().toString())
@@ -1193,6 +1272,7 @@ class MainRepositoryImpl(
                 flagDoobleClic = 0
                 flagAmplitude = false
                 flagFrequency = false
+                setFlagFrequencyLowHigt(false)
                 textToSpeech.stop()
                 isSpeaking = false
                 setInput2("")
@@ -1410,6 +1490,27 @@ class MainRepositoryImpl(
         blockingQueue.clear()
         recognizer.clear()
         DtmfService.stop(context)
+    }
+
+    // Функции для подмены значений частот
+    private fun substituteFrequencyLow(frequency: Float): Float {
+        return when (frequency) {
+            703.125f -> 697.000f
+            765.625f -> 770.000f
+            859.375f -> 852.000f
+            937.500f -> 941.000f
+            else -> frequency // Если условий нет, возвращаем исходное значение
+        }
+    }
+
+    private fun substituteFrequencyHigh(frequency: Float): Float {
+        return when (frequency) {
+            1203.125f -> 1209.000f
+            1343.750f -> 1336.000f
+            1484.375f -> 1477.000f
+            1640.625f -> 1633.000f
+            else -> frequency // Если условий нет, возвращаем исходное значение
+        }
     }
 
     // Функция для преобразования значения в текстовый формат

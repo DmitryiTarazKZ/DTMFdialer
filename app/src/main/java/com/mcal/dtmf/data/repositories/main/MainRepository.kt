@@ -52,6 +52,10 @@ interface MainRepository {
     fun getAmplitudeCheck(): Boolean?
     fun setAmplitudeCheck(value: Boolean)
 
+    fun getFlagFrequencyLowHigtFlow(): Flow<Boolean>
+    fun getFlagFrequencyLowHigt(): Boolean?
+    fun setFlagFrequencyLowHigt(value: Boolean)
+
     fun getSimFlow(): Flow<Int>
     fun getSim(): Int
     fun setSim(value: Int)
@@ -59,6 +63,14 @@ interface MainRepository {
     fun getOutputFrequencyFlow(): Flow<Float>
     fun getOutputFrequency(): Float
     fun setOutputFrequency(outputFrequency: Float)
+
+    fun getOutputFrequencyLowFlow(): Flow<Float>
+    fun getOutputFrequencyLow(): Float
+    fun setOutputFrequencyLow(outputFrequencyLow: Float)
+
+    fun getOutputFrequencyHighFlow(): Flow<Float>
+    fun getOutputFrequencyHigh(): Float
+    fun setOutputFrequencyHigh(outputFrequencyHigh: Float)
 
     fun getOutputAmplitudeFlow(): Flow<Float>
     fun getOutputAmplitude(): Float

@@ -102,6 +102,51 @@ class MainScreen : Screen {
                             }
                         }
                     )
+
+                    // Вывод верхней и нижней частоты DTMF
+                    if (screenState.flagFrequencyLowHigt) {
+                        Spacer(modifier = Modifier.height(5.dp))
+
+                        // Вывод верхней частоты
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(54.dp),
+                        ) {
+                            Text(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 5.dp),
+                                text = screenState.outputFrequencyHigh.toString() + "Hz H",
+                                style = TextStyle(
+                                    fontSize = 40.sp,
+                                    color = Color.Black,
+                                    textAlign = TextAlign.Center
+                                )
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(5.dp))
+
+                        // Вывод нижней частоты
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(54.dp),
+                        ) {
+                            Text(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 5.dp),
+                                text = screenState.outputFrequencyLow.toString() + "Hz L",
+                                style = TextStyle(
+                                    fontSize = 40.sp,
+                                    color = Color.Black,
+                                    textAlign = TextAlign.Center
+                                )
+                            )
+                        }
+                    }
                 }
             }
         )

@@ -17,8 +17,11 @@ class MainViewModel(
             key = mainRepository.getKey() ?: ' ',
             input = mainRepository.getInput() ?: "",
             amplitudeCheck = mainRepository.getAmplitudeCheck() ?: false,
+            flagFrequencyLowHigt = mainRepository.getFlagFrequencyLowHigt() ?: false,
             isRecording = mainRepository.getIsRecording() ?: false,
-            outputFrequency = mainRepository.getOutputFrequency()
+            outputFrequency = mainRepository.getOutputFrequency(),
+            outputFrequencyLow = mainRepository.getOutputFrequencyLow(),
+            outputFrequencyHigh = mainRepository.getOutputFrequencyHigh()
         )
     )
     val screenState = _screenState.asStateFlow()
@@ -26,6 +29,7 @@ class MainViewModel(
         fetchData()
     }
     private fun fetchData() = screenModelScope.launch {
+
         mainRepository.getCallStateFlow().map { callState ->
             _screenState.update {
                 it.copy(
@@ -33,6 +37,7 @@ class MainViewModel(
                 )
             }
         }.launchIn(screenModelScope)
+
         mainRepository.getKeyFlow().map { key ->
             _screenState.update {
                 it.copy(
@@ -40,6 +45,7 @@ class MainViewModel(
                 )
             }
         }.launchIn(screenModelScope)
+
         mainRepository.getInputFlow().map { input ->
             _screenState.update {
                 it.copy(
@@ -47,6 +53,7 @@ class MainViewModel(
                 )
             }
         }.launchIn(screenModelScope)
+
         mainRepository.getAmplitudeCheckFlow().map { value ->
             _screenState.update {
                 it.copy(
@@ -54,6 +61,15 @@ class MainViewModel(
                 )
             }
         }.launchIn(screenModelScope)
+
+        mainRepository.getFlagFrequencyLowHigtFlow().map { value ->
+            _screenState.update {
+                it.copy(
+                    flagFrequencyLowHigt = value
+                )
+            }
+        }.launchIn(screenModelScope)
+
         mainRepository.getIsRecordingFlow().map { value ->
             _screenState.update {
                 it.copy(
@@ -61,10 +77,27 @@ class MainViewModel(
                 )
             }
         }.launchIn(screenModelScope)
+
         mainRepository.getOutputFrequencyFlow().map { value ->
             _screenState.update {
                 it.copy(
                     outputFrequency = value
+                )
+            }
+        }.launchIn(screenModelScope)
+
+        mainRepository.getOutputFrequencyLowFlow().map { value ->
+            _screenState.update {
+                it.copy(
+                    outputFrequencyLow = value
+                )
+            }
+        }.launchIn(screenModelScope)
+
+        mainRepository.getOutputFrequencyHighFlow().map { value ->
+            _screenState.update {
+                it.copy(
+                    outputFrequencyHigh = value
                 )
             }
         }.launchIn(screenModelScope)

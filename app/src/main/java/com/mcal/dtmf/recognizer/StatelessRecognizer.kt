@@ -28,7 +28,9 @@ class StatelessRecognizer(private val spectrum: Spectrum) : KoinComponent {
 
     fun getRecognizedKey(): Char {
         val lowMax = getMax(0, 75)
+        mainRepository.setOutputFrequencyLow(getMax(0, 75) * 15.625F)
         val highMax = getMax(75, 150)
+        mainRepository.setOutputFrequencyHigh(getMax(75, 150) * 15.625F)
         val outputFrequency = getMax(0, 500) * 15.625f
         mainRepository.setOutputFrequency(outputFrequency) //передача инжектированной переменной в репозиторий
 

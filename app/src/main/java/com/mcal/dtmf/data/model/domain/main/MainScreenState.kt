@@ -14,5 +14,8 @@ data class MainScreenState(
     val callState: Int = Call.STATE_DISCONNECTED, // Состояние вызова
     val amplitudeCheck: Boolean = false, // Флаг проверки амплитуды
     val isRecording: Boolean = false, // Флаг определения отпускания PTT при записи голосовой заметки
-    val outputFrequency: Float = 0f // Получение частоты с блока распознавания
+    val flagFrequencyLowHigt: Boolean = false, // Флаг для отображения верней и нижней частоты DTMF
+    val outputFrequency: Float = 0f, // Получение частоты с блока распознавания
+    val outputFrequencyLow: Float = 0f, // Получение нижней частоты с блока распознавания
+    val outputFrequencyHigh: Float = 0f // Получение верхней частоты с блока распознавания
 )
