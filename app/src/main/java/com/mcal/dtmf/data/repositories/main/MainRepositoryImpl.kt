@@ -18,6 +18,7 @@ import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.telecom.Call
+import android.util.Log
 import com.mcal.dtmf.recognizer.DataBlock
 import com.mcal.dtmf.recognizer.Recognizer
 import com.mcal.dtmf.recognizer.Spectrum
@@ -72,6 +73,7 @@ class MainRepositoryImpl(
     private val _outputFrequencyLow: MutableStateFlow<Float?> = MutableStateFlow(0f)
     private val _outputFrequencyHigh: MutableStateFlow<Float?> = MutableStateFlow(0f)
     private val _outputAmplitude: MutableStateFlow<Float?> = MutableStateFlow(0f)
+    private val _volumeLevelTts: MutableStateFlow<Float?> = MutableStateFlow(80f)
     private val _sim: MutableStateFlow<Int> = MutableStateFlow(0)
     private val _selectedSubscriberNumber: MutableStateFlow<Int> = MutableStateFlow(0)
     private val _frequencyCtcss: MutableStateFlow<Double> = MutableStateFlow(0.0)
@@ -86,7 +88,6 @@ class MainRepositoryImpl(
     private val audioFormat = AudioFormat.ENCODING_PCM_16BIT
     private val blockSize = 1024
     private var audioRecord: AudioRecord? = null
-    private var volumeLevelTts = 80
     private var volumeLevelCall = 80
     private var amplitudePtt: Double = 150.000
     private var isTorchOnIs = 5 // Задано 5 чтобы исключить случайное срабатывание (Внимание открытый канал...)
@@ -105,7 +106,7 @@ class MainRepositoryImpl(
     private var dtmfPlaying = false
     private var lastKeyPressTime: Long = 0
     private var flagDoobleClic = 0
-    private var durationVox = 300L
+    private var durationVox = 50L
     private var periodVox = 2500L
     private var ton = 0
     private var pruning = 1000 // Значение обрезки зукового файла
@@ -272,7 +273,11 @@ class MainRepositoryImpl(
     }
 
     override fun setInput(value: String) {
-        _input.update { value }
+        if (flagDtmf) {
+            _input.update { "${durationVox}ms ${getVolumeLevelTts().toInt()}%" }
+        } else {
+            _input.update { value }
+        }
     }
 
     override fun getInput1Flow(): Flow<String> = flow {
@@ -526,6 +531,26 @@ class MainRepositoryImpl(
         _outputAmplitude.update { outputAmplitude }
     }
 
+    // Общий уровень громкости
+    override fun getVolumeLevelTtsFlow(): Flow<Float> = flow {
+        if (_volumeLevelTts.value == null) {
+            try {
+                getVolumeLevelTts()
+            } catch (ex: Exception) {
+                ex.printStackTrace()
+            }
+        }
+        emitAll(_volumeLevelTts.filterNotNull())
+    }
+
+    override fun getVolumeLevelTts(): Float {
+        return _volumeLevelTts.value ?: 0f
+    }
+
+    override fun setVolumeLevelTts(volumeLevelTts: Float) {
+        _volumeLevelTts.update { volumeLevelTts }
+    }
+
     override fun getSelectedSubscriberNumberFlow(): Flow<Int> = flow {
         emitAll(_selectedSubscriberNumber)
     }
@@ -631,7 +656,7 @@ class MainRepositoryImpl(
                 val currentTime = System.currentTimeMillis()
 
                 // Проверяем, прошло ли больше 1 секунды с последнего нажатия
-                if (currentTime - lastKeyPressTime > 1000) {
+                if (currentTime - lastKeyPressTime > durationVox + 400) {
                     val tone = when (key) {
                         '0' -> ToneGenerator.TONE_DTMF_0
                         '1' -> ToneGenerator.TONE_DTMF_1
@@ -654,10 +679,11 @@ class MainRepositoryImpl(
                         playSoundJob.launch {
                             dtmfPlaying = true // Устанавливаем флаг, что DTMF тон проигрывается
                             lastKeyPressTime = currentTime // Обновляем время последнего нажатия
-                            utils.playDtmfTone(it, 1000, durationVox)
-                            delay(1000)
+                            utils.playDtmfTone(it, durationVox + 100, durationVox)
+                            delay(durationVox + 100)
                             dtmfPlaying = false // Сбрасываем флаг
                             setInput("")
+
                         }
                     }
                 }
@@ -953,16 +979,16 @@ class MainRepositoryImpl(
                             }
                             setInput("")
                             flagVox = true
-                            delay(13000)
+                            delay(9000)
                             durationVox = getInput()?.toLongOrNull() ?: 50
-                            if (durationVox > 1000) {
-                                speakText("Ожидается значение от 0 до 1000 милисекунд")
+                            if (durationVox > 999) {
+                                speakText("Ожидается значение от 0 до 999 милисекунд")
                                 setInput("")
                                 flagVox = false
                             } else {
                                 delay(5000)
                                 utils.playDtmfTone(0, 1000, durationVox)
-                                delay(4000)
+                                delay(2000)
                                 setInput("")
                                 flagVox = false
                                 speakText(
@@ -1038,7 +1064,7 @@ class MainRepositoryImpl(
 
                 else if (input == "49") {
                     if (block) {
-                        speakText("Генерация двухтональных команд включена")
+                        speakText("Генерация двухтональных команд включена. Длительность настроена на $durationVox милисекунд. Громкость на ${getVolumeLevelTts().toInt()} процентов")
                         flagDtmf = true
                         setInput("")
                     } else  {
@@ -1120,20 +1146,17 @@ class MainRepositoryImpl(
                 // Команда на увеличение громкости речевых сообщений
                 else if (input == "77") {
                     if (getCall() == null && block) {
-                        if (volumeLevelTts < 100) {
-                            val step = if (volumeLevelTts < 30) 1 else 10
-                            volumeLevelTts += step
-                            setVolumeTts(volumeLevelTts)
-                            if (volumeLevelTts > 100) {
-                                volumeLevelTts = 100
-                            }
-                            speakText(
-                                "Громкость речевых сообщений увеличена и теперь составляет $volumeLevelTts процентов")
+                        val currentVolume = getVolumeLevelTts()
+                        if (currentVolume < 100) {
+                            val step = if (currentVolume < 30) 1f else 10f
+                            val newVolume = (currentVolume + step).coerceAtMost(100f)
+                            setVolumeLevelTts(newVolume)
+                            speakText("Громкость речевых сообщений увеличена и теперь составляет ${newVolume.toInt()} процентов")
                         } else {
                             speakText("Достигнут максимальный уровень громкости")
                         }
                         setInput("")
-                    } else  {
+                    } else {
                         speakText("Команда заблокирована")
                         setInput("")
                     }
@@ -1383,20 +1406,17 @@ class MainRepositoryImpl(
                     // Команда на уменьшение громкости речевых сообщений
                     else if (input == "77") {
                         if (getCall() == null && block) {
-                            if (volumeLevelTts > 0) {
-                                val step = if (volumeLevelTts <= 30) 1 else 10
-                                volumeLevelTts -= step
-                                setVolumeTts(volumeLevelTts)
-                                if (volumeLevelTts < 0) {
-                                    volumeLevelTts = 0
-                                }
-                                speakText(
-                                    "Громкость речевых сообщений уменьшена и теперь составляет $volumeLevelTts процентов")
+                            val currentVolume = getVolumeLevelTts()
+                            if (currentVolume > 0) {
+                                val step = if (currentVolume <= 30) 1f else 10f
+                                val newVolume = (currentVolume - step).coerceAtLeast(0f)
+                                setVolumeLevelTts(newVolume)
+                                speakText("Громкость речевых сообщений уменьшена и теперь составляет ${newVolume.toInt()} процентов")
                             } else {
                                 speakText("Достигнут минимальный уровень громкости")
                             }
                             setInput("")
-                        } else  {
+                        } else {
                             speakText("Команда заблокирована")
                             setInput("")
                         }
@@ -1546,6 +1566,7 @@ class MainRepositoryImpl(
 
     // Функции для подмены значений частот
     private fun substituteFrequencyLow(frequency: Float): Float {
+        Log.d("Контрольный лог", "ЗНАЧЕНИЕ LOW: $frequency")
         return when (frequency) {
             703.125f -> 697.000f
             765.625f -> 770.000f
@@ -1556,8 +1577,10 @@ class MainRepositoryImpl(
     }
 
     private fun substituteFrequencyHigh(frequency: Float): Float {
+        Log.d("Контрольный лог", "ЗНАЧЕНИЕ HIGH: $frequency")
         return when (frequency) {
             1203.125f -> 1209.000f
+            1328.125f -> 1336.000f
             1343.750f -> 1336.000f
             1484.375f -> 1477.000f
             1640.625f -> 1633.000f

@@ -793,7 +793,8 @@ class Utils(
     }
 
     fun playDtmfTone(tone: Int, period: Long, duration: Long) {
-        val toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 100) // 100 - громкость
+        val volume = mainRepository.getVolumeLevelTts()
+        val toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, volume.toInt()) // 100 - громкость
         scope.launch {
             toneGenerator.startTone(tone, duration.toInt()) // Длительность тона
             delay(period) // период проигрывания

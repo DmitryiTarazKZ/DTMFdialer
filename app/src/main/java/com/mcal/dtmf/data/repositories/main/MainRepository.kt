@@ -76,6 +76,10 @@ interface MainRepository {
     fun getOutputAmplitude(): Float
     fun setOutputAmplitude(outputAmplitude: Float)
 
+    fun getVolumeLevelTtsFlow(): Flow<Float>
+    fun getVolumeLevelTts(): Float
+    fun setVolumeLevelTts(volumeLevelTts: Float)
+
     fun getSelectedSubscriberNumberFlow(): Flow<Int>
     fun getSelectedSubscriberNumber(): Int
     fun setSelectedSubscriberNumber(value: Int)

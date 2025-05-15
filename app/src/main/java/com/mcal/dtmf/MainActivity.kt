@@ -37,10 +37,10 @@ class MainActivity : ComponentActivity() {
     private val powerReceiver: BroadcastReceiver = object : BootReceiver() {
         override fun onReceive(context: Context, intent: Intent?) {
             intent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1)?.let { chargePlug ->
-               // val usbCharge = chargePlug == BatteryManager.BATTERY_PLUGGED_USB
+                val usbCharge = chargePlug == BatteryManager.BATTERY_PLUGGED_USB
                 val acCharge = chargePlug == BatteryManager.BATTERY_PLUGGED_AC
-               // val wirelessCharge = chargePlug == BatteryManager.BATTERY_PLUGGED_WIRELESS
-                val currentlyCharging =  acCharge // || wirelessCharge || usbCharge
+                val wirelessCharge = chargePlug == BatteryManager.BATTERY_PLUGGED_WIRELESS
+                val currentlyCharging =  acCharge || wirelessCharge || usbCharge
                 mainRepository.setPower(currentlyCharging)
             }
         }
