@@ -11,6 +11,7 @@ import android.media.AudioManager
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.telecom.TelecomManager
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -60,6 +61,25 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val screenStateReceiver: BroadcastReceiver = object : BroadcastReceiver() {
+        private var wakeLock: PowerManager.WakeLock? = null
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                Intent.ACTION_SCREEN_OFF -> {
+                    mainRepository.speakText("Нельзя отключать экран и сворачивать приложение, иначе нет гарантии что оно будет работать долго")
+                    val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+                    wakeLock = powerManager.newWakeLock(PowerManager.FULL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP, "MyApp::MyWakelockTag")
+                    wakeLock?.acquire(5)
+                }
+                Intent.ACTION_SCREEN_ON -> {
+                    wakeLock?.release()
+                    wakeLock = null // Обнуляем ссылку на WakeLock
+                    window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                }
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         checkPermissions()
@@ -90,6 +110,11 @@ class MainActivity : ComponentActivity() {
         intentFilter.addAction(Intent.ACTION_POWER_CONNECTED)
         intentFilter.addAction(Intent.ACTION_POWER_DISCONNECTED)
         registerReceiver(powerReceiver, intentFilter)
+        val screenStateFilter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_SCREEN_ON)
+        }
+        registerReceiver(screenStateReceiver, screenStateFilter)
     }
 
     private fun offerReplacingDefaultDialer() {
@@ -246,6 +271,7 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
         unregisterReceiver(headphoneReceiver)
         unregisterReceiver(powerReceiver)
+        unregisterReceiver(screenStateReceiver)
         mainRepository.stopDtmf()
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }

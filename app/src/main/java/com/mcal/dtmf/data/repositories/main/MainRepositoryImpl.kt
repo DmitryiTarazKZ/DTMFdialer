@@ -18,7 +18,6 @@ import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.telecom.Call
-import android.util.Log
 import com.mcal.dtmf.recognizer.DataBlock
 import com.mcal.dtmf.recognizer.Recognizer
 import com.mcal.dtmf.recognizer.Spectrum
@@ -103,6 +102,7 @@ class MainRepositoryImpl(
     private var flagAmplitude = false
     private var flagFrequency = false
     private var flagDtmf = false
+    private var flagSelective = false
     private var dtmfPlaying = false
     private var lastKeyPressTime: Long = 0
     private var flagDoobleClic = 0
@@ -111,11 +111,14 @@ class MainRepositoryImpl(
     private var ton = 0
     private var pruning = 1000 // Значение обрезки зукового файла
     private var block = false
-
-
     private var subscribersNumber = 0
     private val subscribers = mutableSetOf<Char>()
     private var isStopRecordingTriggered = false
+
+
+    private var callStartTime: Long = 0 // Время начала исходящего вызова
+    private var frequencyCount: Int = 0 // Счетчик частот в диапазоне
+    private var flagFrequencyCount = false
 
     init {
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -429,12 +432,43 @@ class MainRepositoryImpl(
         return _outputFrequency.value ?: 0f
     }
 
+
     override fun setOutputFrequency(outputFrequency: Float) {
+
         if (flagFrequency) {
-            val formattedFrequensy = String.format("%07.3f", outputFrequency).replace(',', '.') + "Hz"
-            setInput(formattedFrequensy)
+            val formattedFrequency = String.format("%07.3f", outputFrequency).replace(',', '.') + "Hz"
+            setInput(formattedFrequency)
         }
+
+        // Обновляем выходную частоту
         _outputFrequency.update { outputFrequency }
+
+        // Блок отвечает за речевое сообщение: Переместитесь ближе... если нет вызывных гудков (работает при адекватной гальванической связи проверка 55*)
+        if (getCallState() == 1) {
+            val currentTime = System.currentTimeMillis()
+
+            if (callStartTime == 0L) {
+                callStartTime = System.currentTimeMillis() // Запоминаем время начала вызова
+            }
+
+            // Если частота попала в диапазон звучания Контроля посылки вызова, увеличиваем счетчик (сработает если микрофон не блокируется)
+            if (outputFrequency in 385f..455f) { // В диапазон попадают частоты вызывных гудков: Европы, США, Великобритании, Японии
+                frequencyCount++
+            }
+
+            // Если прошло 20 секунд и счетчик < 10 (то есть не было вызывных гудков) произносим сообщение
+            if (currentTime - callStartTime >= 20000) {
+                if ((frequencyCount < 10 && !flagFrequencyCount) && getAmplitudeCheck()) {
+                    frequencyCount = 0
+                    flagFrequencyCount = true
+                    speakText("Попытка соедениния выполняется дольше обычного. Переместитесь ближе к базовой станции")
+                }
+            }
+        } else {
+            callStartTime = 0 // Сбрасываем время начала вызова
+            frequencyCount = 0 // Сбрасываем значение счетчика
+            flagFrequencyCount = false // Сбрасываем флаг предотвращающий многократный вызов TTC
+        }
     }
 
     // получение переменной НИЖНЕЙ частоты с блока распознавания
@@ -548,6 +582,7 @@ class MainRepositoryImpl(
     }
 
     override fun setVolumeLevelTts(volumeLevelTts: Float) {
+         setVolumeTts(volumeLevelTts.toInt())
         _volumeLevelTts.update { volumeLevelTts }
     }
 
@@ -655,7 +690,7 @@ class MainRepositoryImpl(
             if (flagDtmf && !dtmfPlaying) {
                 val currentTime = System.currentTimeMillis()
 
-                // Проверяем, прошло ли больше 1 секунды с последнего нажатия
+                // Проверяем, прошло ли установленное врямя с момента последнего нажатия
                 if (currentTime - lastKeyPressTime > durationVox + 400) {
                     val tone = when (key) {
                         '0' -> ToneGenerator.TONE_DTMF_0
@@ -683,7 +718,6 @@ class MainRepositoryImpl(
                             delay(durationVox + 100)
                             dtmfPlaying = false // Сбрасываем флаг
                             setInput("")
-
                         }
                     }
                 }
@@ -1073,6 +1107,17 @@ class MainRepositoryImpl(
                     }
                 }
 
+                else if (input == "82913746") {
+                    if (block) {
+                        speakText("Внимание! Разблокирована команда для включения селективного вызова")
+                        flagSelective = true
+                        setInput("")
+                    } else  {
+                        speakText("Команда заблокирована")
+                        setInput("")
+                    }
+                }
+
                 // Прямой ввод частоты субтонов
                 else if (input == "58") {
                     if (getCall() == null && block) {
@@ -1108,8 +1153,8 @@ class MainRepositoryImpl(
                             setInput("")
                             delay(12000)
                             if (getInput() == "") speakText("Гальваническая связь полностью отсутствует. Отличный показатель для неселективного вызова")
-                            if (getInput() == "0123456789") speakText("Гальваническая связь присутсвует, все тона восприняты без ошибок")
-                            if (getInput() != "" && getInput() != "0123456789") { speakText("Гальваническая связь присутствует, тона прошли с ошибками") }
+                            if (getInput() == "0123456789") speakText("Гальваническая связь есть, все тона восприняты без ошибок")
+                            if (getInput() != "" && getInput() != "0123456789") { speakText("Гальваническая связь есть, тона прошли с ошибками") }
                             setInput("")
                         }
                     } else  {
@@ -1346,6 +1391,7 @@ class MainRepositoryImpl(
                 flagDoobleClic = 0
                 flagAmplitude = false
                 flagFrequency = false
+                flagSelective = false
                 setFlagFrequencyLowHigt(false)
                 flagDtmf = false
                 textToSpeech.stop()
@@ -1470,7 +1516,7 @@ class MainRepositoryImpl(
                         isTorchOn = true
 
 
-                        if (getInput() == "000" || getInput() == "111" || getInput() == "555") {
+                        if ((getInput() == "000" || getInput() == "111" || getInput() == "555") && flagSelective) {
                             getInput()?.toIntOrNull()?.let {
                                 isTorchOnIs = it
                             }
@@ -1564,27 +1610,25 @@ class MainRepositoryImpl(
         DtmfService.stop(context)
     }
 
-    // Функции для подмены значений частот
+    // Функции для подмены значений частот для двойного частотомера
     private fun substituteFrequencyLow(frequency: Float): Float {
-        Log.d("Контрольный лог", "ЗНАЧЕНИЕ LOW: $frequency")
         return when (frequency) {
             703.125f -> 697.000f
             765.625f -> 770.000f
             859.375f -> 852.000f
             937.500f -> 941.000f
-            else -> frequency // Если условий нет, возвращаем исходное значение
+            else -> frequency
         }
     }
 
     private fun substituteFrequencyHigh(frequency: Float): Float {
-        Log.d("Контрольный лог", "ЗНАЧЕНИЕ HIGH: $frequency")
         return when (frequency) {
             1203.125f -> 1209.000f
             1328.125f -> 1336.000f
             1343.750f -> 1336.000f
             1484.375f -> 1477.000f
             1640.625f -> 1633.000f
-            else -> frequency // Если условий нет, возвращаем исходное значение
+            else -> frequency
         }
     }
 
@@ -1663,7 +1707,7 @@ class MainRepositoryImpl(
     }
 }
 
-//  Log.d("Контрольный лог", "ЗНАЧЕНИЕ: $conType")
+//  Log.d("Контрольный лог", "ЗНАЧЕНИЕ: $.")
 
 
 
