@@ -35,6 +35,9 @@ import org.koin.android.ext.android.inject
 class MainActivity : ComponentActivity() {
     private val mainRepository: MainRepository by inject()
     private val permissionCode = 100
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var isAppInForeground = false
+
     private val powerReceiver: BroadcastReceiver = object : BootReceiver() {
         override fun onReceive(context: Context, intent: Intent?) {
             intent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1)?.let { chargePlug ->
@@ -62,19 +65,27 @@ class MainActivity : ComponentActivity() {
     }
 
     private val screenStateReceiver: BroadcastReceiver = object : BroadcastReceiver() {
-        private var wakeLock: PowerManager.WakeLock? = null
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
                 Intent.ACTION_SCREEN_OFF -> {
-                    mainRepository.speakText("Нельзя отключать экран и сворачивать приложение, иначе нет гарантии что оно будет работать долго")
                     val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
                     wakeLock = powerManager.newWakeLock(PowerManager.FULL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP, "MyApp::MyWakelockTag")
-                    wakeLock?.acquire(5)
+
+                    try {
+                        wakeLock?.acquire(30 * 1000L) // Удерживаем WakeLock на 30 секунд
+                    } catch (e: Exception) {
+                        mainRepository.speakText("Ошибка при захвате WakeLock")
+                    }
                 }
                 Intent.ACTION_SCREEN_ON -> {
-                    wakeLock?.release()
-                    wakeLock = null // Обнуляем ссылку на WakeLock
-                    window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                  if (!isAppInForeground) {  mainRepository.speakText("Приложение свернуто но еще работает. Откройте приложение его должно быть видно") }
+                    try {
+                        wakeLock?.release()
+                    } catch (e: Exception) {
+                        mainRepository.speakText("Ошибка при освобождении WakeLock")
+                    } finally {
+                        wakeLock = null // Обнуляем ссылку на WakeLock
+                    }
                 }
             }
         }
@@ -265,6 +276,17 @@ class MainActivity : ComponentActivity() {
                 permissionCode
             )
         }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        isAppInForeground = false
+        mainRepository.speakText("Нельзя отключать экран и сворачивать приложение... Приложение должно быть видно, иначе система для освобождения памяти может убить процесс")
+    }
+
+    override fun onResume() {
+        super.onResume()
+        isAppInForeground = true
     }
 
     override fun onDestroy() {
