@@ -88,7 +88,7 @@ class MainRepositoryImpl(
     private val blockSize = 1024
     private var audioRecord: AudioRecord? = null
     private var volumeLevelCall = 80
-    private var amplitudePtt: Double = 150.000
+    private var amplitudePtt: Double = 150.000 // Установка начальной точки амплитуды входного сигнала (используется для автоматической остановки записи голосовых заметок
     private var isTorchOnIs = 5 // Задано 5 чтобы исключить случайное срабатывание (Внимание открытый канал...)
     private var isSpeaking = false
     private var lastDialedNumber: String = ""
@@ -107,7 +107,7 @@ class MainRepositoryImpl(
     private var lastKeyPressTime: Long = 0
     private var flagDoobleClic = 0
     private var durationVox = 50L
-    private var periodVox = 2500L
+    private var periodVox = 1400L // Длительность периода следования тонов для отладки платы VOX
     private var ton = 0
     private var pruning = 1000 // Значение обрезки зукового файла
     private var block = false
@@ -977,10 +977,13 @@ class MainRepositoryImpl(
                                 "Установите время удержания в мили секундах на которое требуется настроить вокс")
                             setInput("")
                             delay(15000)
-                            periodVox = getInput()?.toLongOrNull() ?: 2500
+                            periodVox = getInput()?.toLongOrNull() ?: 1400 // Оптимальное значение при увелечение до 2500 в режиме с одной рацией невозможно принять или прервать вызов
                             if (periodVox < 4000) {
-                                speakText(
-                                    "Период следования настроен на $periodVox длительность на $durationVox")
+                                if (periodVox == 1400L) {
+                                    speakText("Установлен рекомендуемый период с длительностью $durationVox")
+                                } else {
+                                    speakText("Период следования настроен на $periodVox длительность на $durationVox")
+                                }
                             } else speakText("Ожидается значение от 0 до 4000 милисекунд")
 
                             delay(10000)

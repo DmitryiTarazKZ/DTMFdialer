@@ -281,7 +281,9 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
         isAppInForeground = false
-        mainRepository.speakText("Нельзя отключать экран и сворачивать приложение... Приложение должно быть видно, иначе система для освобождения памяти может убить процесс")
+//        if (mainRepository.getCallState() == 7) {
+//            mainRepository.speakText("Нельзя отключать экран и сворачивать приложение... Приложение должно быть видно, иначе система для освобождения памяти может убить процесс")
+//        }
     }
 
     override fun onResume() {
