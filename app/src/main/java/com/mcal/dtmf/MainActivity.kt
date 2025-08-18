@@ -255,6 +255,14 @@ class MainActivity : ComponentActivity() {
 
         if (ContextCompat.checkSelfPermission(
                 this,
+                Manifest.permission.WRITE_CALL_LOG
+            ) == PackageManager.PERMISSION_DENIED
+        ) {
+            permissionsToRequest.add(Manifest.permission.WRITE_CALL_LOG)
+        }
+
+        if (ContextCompat.checkSelfPermission(
+                this,
                 Manifest.permission.WRITE_EXTERNAL_STORAGE
             ) == PackageManager.PERMISSION_DENIED
         ) {

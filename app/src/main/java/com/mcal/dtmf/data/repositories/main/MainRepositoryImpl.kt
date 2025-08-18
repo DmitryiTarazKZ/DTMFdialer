@@ -106,8 +106,8 @@ class MainRepositoryImpl(
     private var dtmfPlaying = false
     private var lastKeyPressTime: Long = 0
     private var flagDoobleClic = 0
-    private var durationVox = 50L
-    private var periodVox = 1400L // Длительность периода следования тонов для отладки платы VOX
+    private var durationVox = 50L // Длительность активирующего тона для отладки платы VOX
+    private var periodVox = 1600L // Длительность периода следования тонов для отладки платы VOX
     private var ton = 0
     private var pruning = 1000 // Значение обрезки зукового файла
     private var block = false
@@ -857,7 +857,7 @@ class MainRepositoryImpl(
 
                 // Удаленная проверка пропущенного вызова по команде 0*
                 else if (input == "0" && getCall() == null) {
-                    utils.lastMissed(context)
+                    utils.lastMissed(context, true)
                 }
 
                 // Удаленное сообщение о текущем времени по команде 1*
@@ -974,20 +974,20 @@ class MainRepositoryImpl(
                     if (getCall() == null && block) {
                         playSoundJob.launch {
                             speakText(
-                                "Установите время удержания в мили секундах на которое требуется настроить вокс")
+                                "Установите нужный период в мили секундах, для настройки и измерения времени удержания вокс")
                             setInput("")
-                            delay(15000)
-                            periodVox = getInput()?.toLongOrNull() ?: 1400 // Оптимальное значение при увелечение до 2500 в режиме с одной рацией невозможно принять или прервать вызов
-                            if (periodVox < 4000) {
-                                if (periodVox == 1400L) {
-                                    speakText("Установлен рекомендуемый период с длительностью $durationVox")
+                            delay(16000)
+                            periodVox = getInput()?.toLongOrNull() ?: 1600 // Оптимальное значение при увелечение до 2500 в режиме с одной рацией невозможно принять или прервать вызов
+                            if (periodVox < 4001) {
+                                if (periodVox == 1600L) {
+                                    speakText("Установлен рекомендуемый период $periodVox милисекунд с длительностью тона $durationVox")
                                 } else {
-                                    speakText("Период следования настроен на $periodVox длительность на $durationVox")
+                                    speakText("Период следования настроен на $periodVox милисекунд длительность на $durationVox")
                                 }
                             } else speakText("Ожидается значение от 0 до 4000 милисекунд")
 
-                            delay(10000)
-                            utils.playDtmfTones(periodVox - 100, durationVox)
+                            delay(12000)
+                            utils.playDtmfTones(periodVox, durationVox)
                             setInput("")
                         }
                     } else  {
@@ -999,7 +999,7 @@ class MainRepositoryImpl(
                 // Настройка VOX Верхний порог
                 else if (input == "33") {
                     if (getCall() == null && block) {
-                        utils.playDtmfTones(periodVox + 100, durationVox)
+                        utils.playDtmfTones(periodVox + 200, durationVox)
                         setInput("")
                     } else  {
                         speakText("Команда заблокирована")
@@ -1016,7 +1016,7 @@ class MainRepositoryImpl(
                             }
                             setInput("")
                             flagVox = true
-                            delay(9000)
+                            delay(10000)
                             durationVox = getInput()?.toLongOrNull() ?: 50
                             if (durationVox > 999) {
                                 speakText("Ожидается значение от 0 до 999 милисекунд")
@@ -1491,6 +1491,16 @@ class MainRepositoryImpl(
                             speakText("Команда заблокирована")
                             setInput("")
                         }
+                    }
+
+                    // Удаленная проверка последнего принятого вызова по команде 0# (без автодозвона)
+                    else if (input == "0" && getCall() == null) {
+                        utils.lastMissed(context, false)
+                    }
+
+                    // Очистка всего журнала вызовов по команде 00#
+                    else if (input == "00000" && getCall() == null) {
+                        utils.clearCallLog(context)
                     }
 
                     // Блокировка служебных команд

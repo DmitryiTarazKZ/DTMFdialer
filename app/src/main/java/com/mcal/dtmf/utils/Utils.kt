@@ -269,14 +269,19 @@ class Utils(
         mainRepository.speakText("Текущее время $hoursString $minutesString. Сегодня $dayOfWeek, $dayOfMonthString $month")
     }
 
-    // Последний пропущенный вызов по команде 0*
-    fun lastMissed(context: Context) {
+    // Последний вызов: пропущенный (0*) или входящий (0#)
+    fun lastMissed(context: Context, isIncomingAccepted: Boolean) {
         if (ContextCompat.checkSelfPermission(
                 context,
                 Manifest.permission.READ_CALL_LOG
             ) != PackageManager.PERMISSION_GRANTED
         ) {
-            mainRepository.speakText("Не получено разрешение на доступ к информации о последнем пропущенном вызове")
+            val msg = if (isIncomingAccepted) {
+                "Не получено разрешение на доступ к информации о последнем входящем вызове"
+            } else {
+                "Не получено разрешение на доступ к информации о последнем пропущенном вызове"
+            }
+            mainRepository.speakText(msg)
             mainRepository.setInput("")
             return
         }
@@ -287,30 +292,93 @@ class Utils(
             CallLog.Calls.DATE,
             CallLog.Calls.TYPE
         )
-        val selection = "${CallLog.Calls.TYPE} = ?"
-        val selectionArgs = arrayOf(CallLog.Calls.MISSED_TYPE.toString())
+
+        val selection: String
+        val selectionArgs: Array<String>
+        val notFoundText: String
+
+        if (isIncomingAccepted) {
+            // Последний входящий принятый вызов (длительность > 0)
+            selection = "${CallLog.Calls.TYPE} = ? AND ${CallLog.Calls.DURATION} > 0"
+            selectionArgs = arrayOf(CallLog.Calls.INCOMING_TYPE.toString())
+            notFoundText = "Не найдено входящих вызовов."
+        } else {
+            // Последний пропущенный
+            selection = "${CallLog.Calls.TYPE} = ?"
+            selectionArgs = arrayOf(CallLog.Calls.MISSED_TYPE.toString())
+            notFoundText = "Не найдено пропущенных вызовов."
+        }
+
         val sortOrder = "${CallLog.Calls.DATE} DESC"
+
         context.contentResolver.query(callLogUri, projection, selection, selectionArgs, sortOrder)
             ?.use { cursor ->
                 if (cursor.moveToFirst()) {
                     val numberColumn = cursor.getColumnIndexOrThrow(CallLog.Calls.NUMBER)
                     val dateColumn = cursor.getColumnIndexOrThrow(CallLog.Calls.DATE)
-                    val number = cursor.getString(numberColumn)
+                    val numberRaw = cursor.getString(numberColumn)
                     val date = cursor.getLong(dateColumn)
-                    val contactName = getContactNameByNumber(number, context) ?: "имени которого нет в телефонной книге"
-                    lastMissedCallNumber = contactName
+                    val contactName = getContactNameByNumber(numberRaw, context)
+                        ?: "имени которого нет в телефонной книге"
+
                     val dateFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
-                    lastMissedCallTime = dateFormat.format(Date(date))
-                    mainRepository.speakText(
-                        "Последний пропущенный вызов был от абонента $lastMissedCallNumber... он звонил в $lastMissedCallTime... " +
-                                "Если Вы хотите перезвонить, нажмите звездочку. Для отмены нажмите решетку. Также Вы можете " +
-                                "закрепить этот номер за одной из клавиш быстрого набора")
-                    mainRepository.setInput("")
-                    mainRepository.setInput(number.replace("+7", "8"))
+                    val timeText = dateFormat.format(Date(date))
+
+                    val normalizedNumber = formatPhoneNumber(numberRaw) ?: numberRaw.replace("+7", "8")
+
+                    if (!isIncomingAccepted) {
+                        // Озвучивание для пропущенного вызова и подготовка номера
+                        mainRepository.speakText(
+                            "Последний пропущенный вызов был от абонента $contactName... он звонил в $timeText... " +
+                                    "Если Вы хотите перезвонить, нажмите звездочку. Для отмены нажмите решетку. Также Вы можете " +
+                                    "закрепить этот номер за одной из клавиш быстрого набора")
+                        mainRepository.setInput("")
+                        mainRepository.setInput(normalizedNumber)
+                    } else {
+                        // Озвучивание для пропущенного вызова и подготовка номера
+                        mainRepository.speakText(
+                            "Последний входящий вызов был от абонента $contactName... он звонил в $timeText... " +
+                                    "Если Вы хотите перезвонить, нажмите звездочку. Для отмены нажмите решетку. Также Вы можете " +
+                                    "закрепить этот номер за одной из клавиш быстрого набора")
+                        mainRepository.setInput("")
+                        mainRepository.setInput(normalizedNumber)
+                    }
                 } else {
-                    mainRepository.speakText("Не найдено пропущенных вызовов.")
+                    mainRepository.speakText(notFoundText)
                 }
             }
+    }
+
+    // Очистка всего журнала вызовов по команде 00#
+    fun clearCallLog(context: Context) {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) != PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_CALL_LOG) != PackageManager.PERMISSION_GRANTED
+        ) {
+            mainRepository.speakText("Не получено разрешение на очистку журнала вызовов")
+            mainRepository.setInput("")
+            return
+        }
+
+        try {
+            val deleted = context.contentResolver.delete(CallLog.Calls.CONTENT_URI, null, null)
+            if (deleted >= 0) {
+                // При некоторых прошивках может вернуться 0 даже при успешной очистке пустого журнала
+                val message = if (deleted > 0) {
+                    "Журнал вызовов успешно очищен"
+                } else {
+                    "Журнал вызовов пуст или был очищен ранее"
+                }
+                mainRepository.speakText(message)
+            } else {
+                mainRepository.speakText("Не удалось очистить журнал вызовов")
+            }
+        } catch (e: SecurityException) {
+            mainRepository.speakText("Недостаточно прав для очистки журнала вызовов")
+        } catch (e: Exception) {
+            mainRepository.speakText("Ошибка при очистке журнала вызовов")
+        } finally {
+            mainRepository.setInput("")
+        }
     }
 
     // Функция проверки доступен ли интернет
