@@ -873,37 +873,15 @@ class MainRepositoryImpl(
                     setInput("")
                 }
 
-                // Очистка номеров быстрого набора по команде 3*
+                // Уровень сигнала SIM-карт по команде 3*
                 else if (input == "3" && getCall() == null) {
-                    textToSpeech.setOnUtteranceProgressListener(null)
-                    numberA = ""
-                    numberB = ""
-                    numberC = ""
-                    numberD = ""
-                    lastDialedNumber = ""
-                    speakText("Все номера быстрого набора, были очищены")
-                    setInput("")
+                    utils.speakSimSignalLevels(context)
                 }
 
                 // Удаленная проверка последнего СМС по команде 4*
                 else if (input == "4" && getCall() == null) {
                     val smsText =  utils.getLastIncomingSms(context)
                     speakText(smsText)
-                    setInput("")
-                }
-
-                // Проверка свободной памяти 9999*
-                else if (input == "9999" && getCall() == null) {
-                    val mb = utils.getAvailableMemoryInMB()
-                    val androidVersion = Build.VERSION.RELEASE
-                    val sdkVersion = Build.VERSION.SDK_INT
-
-                    val memoryMessage = if (mb > 1000) {
-                        "Объем свободной памяти составляет ${mb / 1024} гигабайта. Версия андроид $androidVersion. Версия сдк $sdkVersion"
-                    } else {
-                        "Объем свободной памяти составляет $mb мегабайт. Версия андроид $androidVersion. Версия сдк $sdkVersion"
-                    }
-                    speakText(memoryMessage)
                     setInput("")
                 }
 
@@ -933,6 +911,18 @@ class MainRepositoryImpl(
                             setInput1("")
                         }
                     }
+                }
+
+                // Очистка номеров быстрого набора по команде 6*
+                else if (input == "6" && getCall() == null) {
+                    textToSpeech.setOnUtteranceProgressListener(null)
+                    numberA = ""
+                    numberB = ""
+                    numberC = ""
+                    numberD = ""
+                    lastDialedNumber = ""
+                    speakText("Все номера быстрого набора, были очищены")
+                    setInput("")
                 }
 
                 // Запись голосовой заметки
@@ -1263,6 +1253,21 @@ class MainRepositoryImpl(
                     setInput("")
                 }
 
+                // Проверка свободной памяти 9999*
+                else if (input == "9999" && getCall() == null) {
+                    val mb = utils.getAvailableMemoryInMB()
+                    val androidVersion = Build.VERSION.RELEASE
+                    val sdkVersion = Build.VERSION.SDK_INT
+
+                    val memoryMessage = if (mb > 1000) {
+                        "Объем свободной памяти составляет ${mb / 1024} гигабайта. Версия андроид $androidVersion. Версия сдк $sdkVersion"
+                    } else {
+                        "Объем свободной памяти составляет $mb мегабайт. Версия андроид $androidVersion. Версия сдк $sdkVersion"
+                    }
+                    speakText(memoryMessage)
+                    setInput("")
+                }
+
                 // Блок выполнения исходящего вызова по нажатию звездочки
                 else if ((getCall() == null && input.length in 3..11) && (!getFlagFrequencyLowHigt() && !flagDtmf)) {
                     setSim(5)
@@ -1452,6 +1457,11 @@ class MainRepositoryImpl(
                         }
                     }
 
+                    // Команда удаления всех SMS по 4#
+                    else if (input == "4" && getCall() == null) {
+                        utils.deleteAllSms(context)
+                    }
+
                     // Команда на уменьшение громкости речевых сообщений
                     else if (input == "77") {
                         if (getCall() == null && block) {
@@ -1493,7 +1503,7 @@ class MainRepositoryImpl(
                         }
                     }
 
-                    // Удаленная проверка последнего принятого вызова по команде 0# (без автодозвона)
+                    // Удаленная проверка последнего принятого вызова по команде 0#
                     else if (input == "0" && getCall() == null) {
                         utils.lastMissed(context, false)
                     }

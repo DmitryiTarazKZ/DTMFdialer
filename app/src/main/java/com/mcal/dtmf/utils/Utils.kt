@@ -24,6 +24,9 @@ import android.os.Build
 import android.os.Bundle
 import android.os.StatFs
 import android.provider.CallLog
+import android.provider.Telephony
+import android.telephony.SubscriptionManager
+import android.telephony.TelephonyManager
 import android.provider.ContactsContract
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
@@ -335,7 +338,7 @@ class Utils(
                         mainRepository.setInput("")
                         mainRepository.setInput(normalizedNumber)
                     } else {
-                        // Озвучивание для пропущенного вызова и подготовка номера
+                        // Озвучивание для принятого входящего вызова и подготовка номера
                         mainRepository.speakText(
                             "Последний входящий вызов был от абонента $contactName... он звонил в $timeText... " +
                                     "Если Вы хотите перезвонить, нажмите звездочку. Для отмены нажмите решетку. Также Вы можете " +
@@ -349,7 +352,7 @@ class Utils(
             }
     }
 
-    // Очистка всего журнала вызовов по команде 00#
+    // Очистка всего журнала вызовов по команде 00000#
     fun clearCallLog(context: Context) {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) != PackageManager.PERMISSION_GRANTED ||
             ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_CALL_LOG) != PackageManager.PERMISSION_GRANTED
@@ -733,6 +736,44 @@ class Utils(
         return "сообщения отсутствуют"
     }
 
+    // Удаление всех SMS по команде 4# (требуется быть приложением по умолчанию для SMS на Android 4.4+) ФУНКЦИЯ НЕ РАБОТАЕТ!!!
+    fun deleteAllSms(context: Context) {
+        // Проверка права на чтение (для чтения статуса/подсказки) — фактическое удаление доступно только приложению SMS по умолчанию
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
+            mainRepository.speakText("Недостаточно прав для удаления сообщений")
+            mainRepository.setInput("")
+            return
+        }
+
+        // Начиная с Android 4.4 (API 19), удалять SMS может только приложение SMS по умолчанию
+        try {
+            val defaultSmsPackage = Telephony.Sms.getDefaultSmsPackage(context)
+            val myPackage = context.packageName
+            if (defaultSmsPackage != null && defaultSmsPackage != myPackage) {
+                mainRepository.speakText("Удаление невозможно: установите это приложение как программу SMS по умолчанию")
+                mainRepository.setInput("")
+                return
+            }
+        } catch (e: Exception) {
+            // На некоторых устройствах Telephony API может вести себя нестандартно — продолжаем попытку удаления
+        }
+
+        try {
+            val deleted = context.contentResolver.delete(Uri.parse("content://sms"), null, null)
+            if (deleted > 0) {
+                mainRepository.speakText("Все сообщения удалены")
+            } else {
+                mainRepository.speakText("Сообщений для удаления не найдено")
+            }
+        } catch (se: SecurityException) {
+            mainRepository.speakText("Недостаточно прав для удаления сообщений")
+        } catch (e: Exception) {
+            mainRepository.speakText("Ошибка при удалении сообщений")
+        } finally {
+            mainRepository.setInput("")
+        }
+    }
+
     // Функция для отправки надиктованного сообщения СМС по команде 4 после набора номера
     fun sendSms(context: Context, phoneNumber: String, message: String): Boolean {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
@@ -835,6 +876,108 @@ class Utils(
             }.joinToString("")
         }
         return convertedWords.joinToString(" ")
+    }
+
+    // Озвучивание уровня сотовой сети по SIM-картам (команда 3*)
+    fun speakSimSignalLevels(context: Context) {
+        val hasPerm = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.READ_PHONE_STATE
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (!hasPerm) {
+            mainRepository.speakText("Не получено разрешение на доступ к уровню сигнала сотовой сети")
+            mainRepository.setInput("")
+            return
+        }
+
+        val subMgr = context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as SubscriptionManager
+        val telMgr = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+        val subs = subMgr.activeSubscriptionInfoList
+
+        if (subs == null || subs.isEmpty()) {
+            mainRepository.speakText("В устройстве нет ни одной действующей сим карты")
+            mainRepository.setInput("")
+            return
+        }
+
+        fun mapOperator(name: String?): String {
+            return when (name) {
+                "ACTIV" -> "Актив"
+                "ALTEL" -> "Алтэл"
+                "MTS" -> "МТС"
+                "Beeline KZ", "Beeline" -> "Билайн"
+                "Megafon" -> "Мегафон"
+                "Tele2" -> "Теле 2"
+                else -> name ?: "Нет сигнала"
+            }
+        }
+
+        fun levelToWord(level: Int?): String {
+            return when (level) {
+                null -> "неизвестен"
+                1 -> "слабый"
+                2 -> "средний"
+                3 -> "хороший"
+                else -> "отличный"
+            }
+        }
+
+        var firstMsg = ""
+        var secondMsg = ""
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            subs.forEach { s ->
+                val tm = telMgr.createForSubscriptionId(s.subscriptionId)
+                val strength = try { tm.signalStrength } catch (_: Exception) { null }
+                val level = try { strength?.level } catch (_: Exception) { null }
+                val op = mapOperator(s.carrierName?.toString())
+                val part = if (strength == null || level == null || level <= 0) {
+                    "сигнал отсутствует"
+                } else {
+                    "уровень ${levelToWord(level)}"
+                }
+                if (s.simSlotIndex == 0) {
+                    firstMsg = "первая сим карта, оператор $op, $part"
+                } else if (s.simSlotIndex == 1) {
+                    secondMsg = "вторая сим карта, оператор $op, $part"
+                }
+            }
+        } else {
+            val cells = try { telMgr.allCellInfo } catch (_: Exception) { null }
+            var bestLevelRaw = Int.MIN_VALUE
+            cells?.forEach { cell ->
+                try {
+                    when (cell) {
+                        is android.telephony.CellInfoGsm -> bestLevelRaw = kotlin.math.max(bestLevelRaw, cell.cellSignalStrength.level)
+                        is android.telephony.CellInfoLte -> bestLevelRaw = kotlin.math.max(bestLevelRaw, cell.cellSignalStrength.level)
+                        is android.telephony.CellInfoWcdma -> bestLevelRaw = kotlin.math.max(bestLevelRaw, cell.cellSignalStrength.level)
+                        is android.telephony.CellInfoCdma -> bestLevelRaw = kotlin.math.max(bestLevelRaw, cell.cellSignalStrength.level)
+                        else -> {}
+                    }
+                } catch (_: Exception) {}
+            }
+            val bestLevel: Int? = if (bestLevelRaw == Int.MIN_VALUE) null else bestLevelRaw
+            subs.forEach { s ->
+                val op = mapOperator(s.carrierName?.toString())
+                val part = if (bestLevel == null || bestLevel <= 0) "сигнал отсутствует" else "уровень ${levelToWord(bestLevel)}"
+                if (s.simSlotIndex == 0) {
+                    firstMsg = "первая сим карта, оператор $op, $part"
+                } else if (s.simSlotIndex == 1) {
+                    secondMsg = "вторая сим карта, оператор $op, $part"
+                }
+            }
+        }
+
+        val message = when {
+            firstMsg.isNotEmpty() && secondMsg.isNotEmpty() -> "Уровни сотовой сети: $firstMsg, $secondMsg"
+            firstMsg.isNotEmpty() -> "Уровни сотовой сети: $firstMsg"
+            secondMsg.isNotEmpty() -> "Уровни сотовой сети: $secondMsg"
+            else -> "Нет данных по уровню сигнала"
+        }
+
+        mainRepository.speakText(message)
+        mainRepository.setInput("")
     }
 
     // Контрольные тона для отладки VOX а также проверки гальванической развязки
