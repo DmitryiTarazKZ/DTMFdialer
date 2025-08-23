@@ -18,6 +18,7 @@ import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.telecom.Call
+import android.util.Log
 import com.mcal.dtmf.recognizer.DataBlock
 import com.mcal.dtmf.recognizer.Recognizer
 import com.mcal.dtmf.recognizer.Spectrum
@@ -87,8 +88,9 @@ class MainRepositoryImpl(
     private val audioFormat = AudioFormat.ENCODING_PCM_16BIT
     private val blockSize = 1024
     private var audioRecord: AudioRecord? = null
-    private var volumeLevelCall = 80
+    private var volumeLevelCall = 80 // Громкость вызова по умолчанию в процентах
     private var amplitudePtt: Double = 150.000 // Установка начальной точки амплитуды входного сигнала (используется для автоматической остановки записи голосовых заметок
+    private var amplitudeCtcssCorrect: Double = 0.02 // Корректирующее значения прибавляется к установленному уровню в момент поднятия трубки
     private var isTorchOnIs = 5 // Задано 5 чтобы исключить случайное срабатывание (Внимание открытый канал...)
     private var isSpeaking = false
     private var lastDialedNumber: String = ""
@@ -231,12 +233,20 @@ class MainRepositoryImpl(
     }
 
     override fun setCallState(callState: Int) {
-        if (getFrequencyCtcss() != 0.0 && (callState == 2 || callState == 1 || callState == 4)) {
-            // Генерируем субтон в поток вызова если входящий, исходящий или трубку подняли
-            utils.playCTCSS(getFrequencyCtcss(), getVolumeLevelCtcss() - 0.02) // Коррекция уровня для устранения опасности зависания на передаче
+
+        if (getFrequencyCtcss() != 0.0 && (callState == 1)) {
+            // Генерируем субтон в поток вызова если исходящий
+            utils.playCTCSS(getFrequencyCtcss(), getVolumeLevelCtcss())
         }
+
+        if (getFrequencyCtcss() != 0.0 && callState == 4) {
+            // Поднимаем уровень субтона если абонент поднял трубку на корректирующее значение
+            utils.playCTCSS(getFrequencyCtcss(), getVolumeLevelCtcss() + amplitudeCtcssCorrect)
+        }
+
         if (getFrequencyCtcss() != 0.0 && callState == 7) {
-            utils.stopPlayback() // Прекращаем генерацию если вызов завершен
+            // Прекращаем генерацию субтона если вызов завершен
+            utils.stopPlayback()
         }
         _callState.update { callState }
     }
@@ -1246,6 +1256,50 @@ class MainRepositoryImpl(
                     }
                 }
 
+                // Переключение в двухканальный режим
+                else if (input == "123") {
+                    if (getCall() == null && block) {
+                        voxActivation = 0
+                        setFrequencyCtcss(60.0) // Устанавливаем частоту субтона в 60 герц
+                        setVolumeLevelCtcss(0.08) // Устанавливаем амплитуду субтона в 80%
+                        speakText("Произведено переключение в двухканальный режим, требуется подключение двух радиостанций")
+                        setInput("")
+                    } else {
+                        speakText("Команда заблокирована")
+                        setInput("")
+                    }
+                }
+
+                // Установка корректирующего значения амплитуды субтона
+                else if (input == "124") {
+                    if (getCall() == null && block) {
+                        playSoundJob.launch {
+                            speakText("Установите корректирующее значение амплитуды субтона в процентах")
+                            setInput("")
+                            delay(19000)
+                            val userInput = getInput()
+                            if (userInput.isNullOrEmpty()) {
+                                amplitudeCtcssCorrect = 0.02
+                                speakText("Установлено значение по умолчанию 20%")
+                                setInput("")
+                            } else {
+                                val inputValue = userInput.toIntOrNull() ?: 0
+                                if (inputValue > 1000) {
+                                    speakText("Ожидается значение от 1 до 1000 процентов")
+                                    setInput("")
+                                } else {
+                                    amplitudeCtcssCorrect = inputValue / 1000.0
+                                    speakText("Корректирующее значение установлено на $inputValue%")
+                                    setInput("")
+                                }
+                            }
+                        }
+                    } else {
+                        speakText("Команда заблокирована")
+                        setInput("")
+                    }
+                }
+
                 // Разблокировка служебных команд
                 else if (input == "1379" && getCall() == null) {
                     speakText("Служебные команды разблокированы")
@@ -1503,6 +1557,15 @@ class MainRepositoryImpl(
                         }
                     }
 
+                    // Откат двухканального режима (возврат к одноканальному)
+                    else if (input == "123" && getCall() == null) {
+                        voxActivation = 500
+                        setFrequencyCtcss(0.0)
+                        setVolumeLevelCtcss(0.08)
+                        speakText("Выполнен возврат к одноканальному режиму, достаточно одной радиостанции")
+                        setInput("")
+                    }
+
                     // Удаленная проверка последнего принятого вызова по команде 0#
                     else if (input == "0" && getCall() == null) {
                         utils.lastMissed(context, false)
@@ -1705,7 +1768,9 @@ class MainRepositoryImpl(
                     textToSpeech.setOnUtteranceProgressListener(null)
                     textToSpeech.stop()
                     textToSpeech.shutdown()
-                    utils.stopPlayback()
+                    if (getCallState() == 7) {
+                        utils.stopPlayback()
+                    }
                 }
 
                 @Deprecated("This method overrides a deprecated member", ReplaceWith("..."))
