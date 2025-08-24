@@ -17,5 +17,8 @@ data class MainScreenState(
     val flagFrequencyLowHigt: Boolean = false, // Флаг для отображения верней и нижней частоты DTMF
     val outputFrequency: Float = 0f, // Получение частоты с блока распознавания
     val outputFrequencyLow: Float = 0f, // Получение нижней частоты с блока распознавания
-    val outputFrequencyHigh: Float = 0f // Получение верхней частоты с блока распознавания
+    val outputFrequencyHigh: Float = 0f, // Получение верхней частоты с блока распознавания
+    val frequencyCtcss: Double = 0.0, // Значение частоты субтона
+    val volumeLevelCtcss: Double = 0.08, // Уровень громкости субтона
+    val isPlaying: Boolean = false
 )

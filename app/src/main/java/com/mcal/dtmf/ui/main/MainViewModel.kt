@@ -21,7 +21,10 @@ class MainViewModel(
             isRecording = mainRepository.getIsRecording() ?: false,
             outputFrequency = mainRepository.getOutputFrequency(),
             outputFrequencyLow = mainRepository.getOutputFrequencyLow(),
-            outputFrequencyHigh = mainRepository.getOutputFrequencyHigh()
+            outputFrequencyHigh = mainRepository.getOutputFrequencyHigh(),
+            frequencyCtcss = mainRepository.getFrequencyCtcss(),
+            volumeLevelCtcss = mainRepository.getVolumeLevelCtcss(),
+            isPlaying = mainRepository.getIsPlaying() ?: false
         )
     )
     val screenState = _screenState.asStateFlow()
@@ -78,6 +81,14 @@ class MainViewModel(
             }
         }.launchIn(screenModelScope)
 
+        mainRepository.getIsPlayingFlow().map { value ->
+            _screenState.update {
+                it.copy(
+                    isPlaying = value
+                )
+            }
+        }.launchIn(screenModelScope)
+
         mainRepository.getOutputFrequencyFlow().map { value ->
             _screenState.update {
                 it.copy(
@@ -98,6 +109,22 @@ class MainViewModel(
             _screenState.update {
                 it.copy(
                     outputFrequencyHigh = value
+                )
+            }
+        }.launchIn(screenModelScope)
+
+        mainRepository.getFrequencyCtcssFlow().map { value ->
+            _screenState.update {
+                it.copy(
+                    frequencyCtcss = value
+                )
+            }
+        }.launchIn(screenModelScope)
+
+        mainRepository.getVolumeLevelCtcssFlow().map { value ->
+            _screenState.update {
+                it.copy(
+                    volumeLevelCtcss = value
                 )
             }
         }.launchIn(screenModelScope)

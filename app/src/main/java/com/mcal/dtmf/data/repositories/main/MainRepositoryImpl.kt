@@ -66,6 +66,7 @@ class MainRepositoryImpl(
     private val _call: MutableStateFlow<Call?> = MutableStateFlow(null)
     private val _callState: MutableStateFlow<Int> = MutableStateFlow(Call.STATE_DISCONNECTED)
     private val _powerState: MutableStateFlow<Boolean?> = MutableStateFlow(null)
+    private val _isPlaying: MutableStateFlow<Boolean?> = MutableStateFlow(null)
     private val _isRecording: MutableStateFlow<Boolean?> = MutableStateFlow(null)
     private val _amplitudeCheck: MutableStateFlow<Boolean?> = MutableStateFlow(null)
     private val _flagFrequencyLowHigt: MutableStateFlow<Boolean?> = MutableStateFlow(null)
@@ -241,11 +242,14 @@ class MainRepositoryImpl(
 
         if (getFrequencyCtcss() != 0.0 && callState == 4) {
             // Поднимаем уровень субтона если абонент поднял трубку на корректирующее значение
-            utils.playCTCSS(getFrequencyCtcss(), getVolumeLevelCtcss() + amplitudeCtcssCorrect)
+            setVolumeLevelCtcss(getVolumeLevelCtcss() + amplitudeCtcssCorrect)
+            utils.playCTCSS(getFrequencyCtcss(), getVolumeLevelCtcss())
         }
 
         if (getFrequencyCtcss() != 0.0 && callState == 7) {
-            // Прекращаем генерацию субтона если вызов завершен
+            Log.e("Контрольный лог", "СРАБОТАЛО УСЛОВИЕ")
+            // Прекращаем генерацию субтона если вызов и возвращаем уровень на начальное значение
+            setVolumeLevelCtcss(getVolumeLevelCtcss() - amplitudeCtcssCorrect / 2) // так как условие срабатывает 2 раза то делим на 2
             utils.stopPlayback()
         }
         _callState.update { callState }
@@ -360,7 +364,7 @@ class MainRepositoryImpl(
     override fun getIsRecordingFlow(): Flow<Boolean> = flow {
         if (_isRecording.value == null) {
             try {
-                getPower()
+                getIsRecording()
             } catch (ex: Exception) {
                 ex.printStackTrace()
             }
@@ -374,6 +378,25 @@ class MainRepositoryImpl(
 
     override fun setIsRecording(value: Boolean) {
         _isRecording.update { value }
+    }
+
+    override fun getIsPlayingFlow(): Flow<Boolean> = flow {
+        if (_isPlaying.value == null) {
+            try {
+                getIsPlaying()
+            } catch (ex: Exception) {
+                ex.printStackTrace()
+            }
+        }
+        emitAll(_isPlaying.filterNotNull())
+    }
+
+    override fun getIsPlaying(): Boolean {
+        return _isPlaying.value ?: false
+    }
+
+    override fun setIsPlaying(value: Boolean) {
+        _isPlaying.update { value }
     }
 
     override fun getAmplitudeCheckFlow(): Flow<Boolean> = flow {

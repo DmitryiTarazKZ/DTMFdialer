@@ -41,8 +41,19 @@ class MainScreen : Screen {
                 TopAppBar(
                     title = {
                         Text(
-                            text = if (screenState.amplitudeCheck) "Супертелефон" else "Блокировка MIC",
-                            color = if (screenState.amplitudeCheck) Color.Black else Color.Red
+                            text = when {
+                                screenState.frequencyCtcss > 0.0 -> {
+                                    val volumePercent = (screenState.volumeLevelCtcss * 1000).toInt()
+                                    "CTCSS ${screenState.frequencyCtcss} Гц ${volumePercent}%"
+                                }
+                                screenState.amplitudeCheck -> "Супертелефон"
+                                else -> "Блокировка MIC"
+                            },
+                            color = when {
+                                screenState.isPlaying -> Color.Red
+                                !screenState.amplitudeCheck -> Color.Red
+                                else -> Color.Black
+                            }
                         )
                     },
                     actions = {
@@ -52,6 +63,7 @@ class MainScreen : Screen {
                     }
                 )
             },
+
             content = { paddingValues ->
                 Column(
                     modifier = Modifier
@@ -74,7 +86,7 @@ class MainScreen : Screen {
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(vertical = 5.dp),
-                                text = screenState.input,
+                                text = if (screenState.isRecording) "Диктофон" else screenState.input,
                                 style = TextStyle(
                                     fontSize = 40.sp,
                                     color = Color.Black,

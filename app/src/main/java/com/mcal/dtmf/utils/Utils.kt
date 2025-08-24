@@ -60,11 +60,8 @@ class Utils(
     private val scope: CoroutineScope,
     private val context: Application
 ) {
-    private var lastMissedCallNumber: String? = null
-    private var lastMissedCallTime: String? = null
     private val requestCodeContactsPermission = 1
     private var audioTrack: AudioTrack? = null
-    private var isPlaying = false
     private var availableMB = 0L
     private var audioRecord: AudioRecord? = null
     private var recordedFilePath: String? = null
@@ -1096,9 +1093,9 @@ class Utils(
             return
         }
 
-        if (!isPlaying) {
+        if (mainRepository.getIsPlaying() != true) {
             audioTrack?.play()
-            isPlaying = true
+            mainRepository.setIsPlaying(true)
 
             val bufferSize = sampleRate / 2 // Увеличиваем размер буфера для более плавного сигнала
             val buffer = FloatArray(bufferSize) // Используем FloatArray для большей точности
@@ -1138,7 +1135,7 @@ class Utils(
             aHigh[2] = (1 - sqrt(2.0) * wcHigh + wcHigh * wcHigh) * kHigh
 
             scope.launch {
-                while (isPlaying) {
+                while (mainRepository.getIsPlaying() == true) {
                     for (i in 0 until bufferSize) {
                         val rawValue = volumeLevelCtcss * sin(angle) // Генерация синусоиды
 
@@ -1191,8 +1188,8 @@ class Utils(
     // Oстановка генерации субтона
     fun stopPlayback() {
         Log.e("Контрольный лог", "СТОП ГЕНЕРАТОР")
-        if (isPlaying) {
-            isPlaying = false
+        if (mainRepository.getIsPlaying() == true) {
+            mainRepository.setIsPlaying(false)
             audioTrack?.stop()
             // audioTrack?.release() // Не освобождайте, если хотите использовать его повторно
             // audioTrack = null // Не обнуляйте, если хотите использовать его повторно

@@ -48,6 +48,10 @@ interface MainRepository {
     fun getIsRecording(): Boolean?
     fun setIsRecording(value: Boolean)
 
+    fun getIsPlayingFlow(): Flow<Boolean>
+    fun getIsPlaying(): Boolean?
+    fun setIsPlaying(value: Boolean)
+
     fun getAmplitudeCheckFlow(): Flow<Boolean>
     fun getAmplitudeCheck(): Boolean?
     fun setAmplitudeCheck(value: Boolean)
