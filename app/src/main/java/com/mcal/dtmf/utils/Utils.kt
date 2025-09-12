@@ -32,7 +32,6 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.telephony.SmsManager
-import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.mcal.dtmf.data.repositories.main.MainRepository
@@ -1061,7 +1060,6 @@ class Utils(
 
     // Генерация субтонов CTCSS для системы непрерывного тонального шумоподавления
     fun playCTCSS(frequency: Double, volumeLevelCtcss: Double) {
-        Log.d("Контрольный лог", "СТАРТ ГЕНЕРАТОРА: ЗНАЧЕНИЕ Частоты: $frequency, ЗНАЧЕНИЕ Амплитуды: $volumeLevelCtcss")
         val sampleRate = 44100 // Частота дискретизации
         val lowCutoffFrequency = frequency * 0.8 // Нижняя частота среза полосового фильтра (например, 80% от частоты)
         val highCutoffFrequency = frequency * 1.2 // Верхняя частота среза полосового фильтра (например, 120% от частоты)
@@ -1187,7 +1185,6 @@ class Utils(
 
     // Oстановка генерации субтона
     fun stopPlayback() {
-        Log.e("Контрольный лог", "СТОП ГЕНЕРАТОР")
         if (mainRepository.getIsPlaying() == true) {
             mainRepository.setIsPlaying(false)
             audioTrack?.stop()

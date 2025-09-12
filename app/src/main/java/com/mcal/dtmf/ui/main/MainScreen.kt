@@ -46,7 +46,7 @@ class MainScreen : Screen {
                                     val volumePercent = (screenState.volumeLevelCtcss * 1000).toInt()
                                     "CTCSS ${screenState.frequencyCtcss} Гц ${volumePercent}%"
                                 }
-                                screenState.amplitudeCheck -> "Супертелефон"
+                                screenState.amplitudeCheck -> "Супертелефон" + " <${screenState.callState}>"
                                 else -> "Блокировка MIC"
                             },
                             color = when {
@@ -167,10 +167,11 @@ class MainScreen : Screen {
     @Composable
     private fun CallIndicator(callState: Int) {
         val color = when (callState) {
-            Call.STATE_DIALING -> Color(0xFFE72929)
-            Call.STATE_RINGING -> Color(0xFF0000FF)
-            Call.STATE_ACTIVE -> Color(0xFF007F73)
-            else -> Color(0xFF2196F3)
+            Call.STATE_DIALING -> Color(0xFFE72929) // Красный для исходящего вызова (1)
+            Call.STATE_RINGING -> Color(0xFF0000FF) // Синий для входящего вызова (2)
+            Call.STATE_ACTIVE -> Color(0xFF007F73) // Зеленый для активного вызова (4)
+            Call.STATE_CONNECTING -> Color(0xFFFFEB3B) // Желтый для состояния подключения (9)
+            else -> Color(0xFF2196F3) // По умолчанию синий
         }
 
         val icon = when (callState) {

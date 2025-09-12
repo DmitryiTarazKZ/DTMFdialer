@@ -103,6 +103,7 @@ class MainRepositoryImpl(
     private var isTorchOn = false
     private var flagVox = false
     private var flagAmplitude = false
+    private var flagSimMonitor = false
     private var flagFrequency = false
     private var flagDtmf = false
     private var flagSelective = false
@@ -115,7 +116,9 @@ class MainRepositoryImpl(
     private var pruning = 1000 // Значение обрезки зукового файла
     private var block = false
     private var subscribersNumber = 0
-    private val subscribers = mutableSetOf<Char>()
+    private val subscribers = mutableSetOf<Char>() // Список количества абонентов для селективного вызова
+    private val callStates = mutableListOf<Int>() // Список изменений вызова для мониторинга точки установки репитера
+    private val durationSeconds = 30000 // Время в течении которого происходит попытка дозвона для мониторинга
     private var isStopRecordingTriggered = false
 
 
@@ -891,6 +894,7 @@ class MainRepositoryImpl(
                 // Удаленная проверка пропущенного вызова по команде 0*
                 else if (input == "0" && getCall() == null) {
                     utils.lastMissed(context, true)
+                    setInput("")
                 }
 
                 // Удаленное сообщение о текущем времени по команде 1*
@@ -946,16 +950,9 @@ class MainRepositoryImpl(
                     }
                 }
 
-                // Очистка номеров быстрого набора по команде 6*
+                // свободная команда 6*
                 else if (input == "6" && getCall() == null) {
-                    textToSpeech.setOnUtteranceProgressListener(null)
-                    numberA = ""
-                    numberB = ""
-                    numberC = ""
-                    numberD = ""
-                    lastDialedNumber = ""
-                    speakText("Все номера быстрого набора, были очищены")
-                    setInput("")
+                // СВОБОДНАЯ КОМАНДА!!!!!!!!!!!!
                 }
 
                 // Запись голосовой заметки
@@ -965,11 +962,9 @@ class MainRepositoryImpl(
                     setInput("")
                 }
 
-                // Удаление голосовой заметки
+                // свободная команда
                 else if (input == "8" && getCall() == null) {
-                    utils.deleteRecordedFile(isTorchOnIs, subscribers)
-                    setInput("")
-
+                    // СВОБОДНАЯ КОМАНДА!!!!!!!!!!!
                 }
 
                 // Воспроизведение голосовой заметки
@@ -1313,7 +1308,7 @@ class MainRepositoryImpl(
                                 } else {
                                     amplitudeCtcssCorrect = inputValue / 1000.0
                                     speakText("Корректирующее значение установлено на $inputValue%")
-                                    setInput("")
+                                setInput("")
                                 }
                             }
                         }
@@ -1477,6 +1472,7 @@ class MainRepositoryImpl(
                 flagAmplitude = false
                 flagFrequency = false
                 flagSelective = false
+                flagSimMonitor = false
                 setFlagFrequencyLowHigt(false)
                 flagDtmf = false
                 textToSpeech.stop()
@@ -1486,8 +1482,28 @@ class MainRepositoryImpl(
                 if (getCall() == null) {
                     setInput("")
 
+                    // свободная команда 1#
+                    if (input == "1" && getCall() == null) {
+                        // СВОБОДНАЯ КОМАНДА!!!!!!!!!!!!   СДЕЛАТЬ БУДИЛЬНИК
+                    }
+
+                    // свободная команда 2#
+                    else if (input == "2" && getCall() == null) {
+                        // СВОБОДНАЯ КОМАНДА!!!!!!!!!!!!
+                    }
+
+                    // Мониторинг сигнала SIM-карт по команде 3#
+                    else if (input == "3" && getCall() == null) {
+                        checkCallStateSequence()
+                    }
+
+                    // Команда удаления всех SMS по 4#
+                    else if (input == "4" && getCall() == null) {
+                        utils.deleteAllSms(context)
+                    }
+
                     // Голосовой поиск абонента в телефонной книге по команде 5# с последующим удалением
-                    if ((input == "5" && getCall() == null) && !getIsRecording()) { // Блокируем команду если идет запись голосовой заметки
+                    else if ((input == "5" && getCall() == null) && !getIsRecording()) { // Блокируем команду если идет запись голосовой заметки
                         playSoundJob.launch {
                             if (utils.isOnline(context)) {
                                 speakText("Назовите фамилию и имя абонента которого вы хотите удалить с телефонной книги")
@@ -1520,6 +1536,30 @@ class MainRepositoryImpl(
                         }
                     }
 
+                    // Очистка номеров быстрого набора по команде 6*
+                    else if (input == "6" && getCall() == null) {
+                        textToSpeech.setOnUtteranceProgressListener(null)
+                        numberA = ""
+                        numberB = ""
+                        numberC = ""
+                        numberD = ""
+                        lastDialedNumber = ""
+                        speakText("Все номера быстрого набора, были очищены")
+                        setInput("")
+                    }
+
+                    // свободная команда
+                    else if (input == "8" && getCall() == null) {
+                        //СВОБОДНАЯ КОМАНДА!!!!!!!!!!!!!
+                    }
+
+                    // Удаление голосовой заметки 99999#
+                    else if (input == "99999" && getCall() == null) {
+                        utils.deleteRecordedFile(isTorchOnIs, subscribers)
+                        setInput("")
+
+                    }
+
                     // Команда отключения генерации тонов CTCSS
                     else if (input == "58") {
                         if (getCall() == null && block) {
@@ -1532,11 +1572,6 @@ class MainRepositoryImpl(
                         speakText("Команда заблокирована")
                         setInput("")
                         }
-                    }
-
-                    // Команда удаления всех SMS по 4#
-                    else if (input == "4" && getCall() == null) {
-                        utils.deleteAllSms(context)
                     }
 
                     // Команда на уменьшение громкости речевых сообщений
@@ -1592,11 +1627,13 @@ class MainRepositoryImpl(
                     // Удаленная проверка последнего принятого вызова по команде 0#
                     else if (input == "0" && getCall() == null) {
                         utils.lastMissed(context, false)
+                        setInput("")
                     }
 
-                    // Очистка всего журнала вызовов по команде 00#
+                    // Очистка всего журнала вызовов по команде 00000#
                     else if (input == "00000" && getCall() == null) {
                         utils.clearCallLog(context)
+                        setInput("")
                     }
 
                     // Блокировка служебных команд
@@ -1717,6 +1754,65 @@ class MainRepositoryImpl(
         blockingQueue.clear()
         recognizer.clear()
         DtmfService.stop(context)
+    }
+
+    // Функция мониторинга возможности выполнить вызов для нахождения точки установки репитера
+    private fun checkCallStateSequence() {
+        scope.launch {
+            speakText("Поиск точки расположения репитера. Попытки выполнить вызов будут выполняться непрерывно")
+            delay(11000)
+
+            flagSimMonitor = true
+            var currentSim = 0
+
+            while (flagSimMonitor) {
+                setInput("87057895564") // Тестовый звонок будет выполняться на этот номер (можно указать любой)
+                setSim(currentSim)
+                delay(500) // Без этой задержки происходил откат к стандартной звонилке
+                DtmfService.callStart(context)
+
+                // Записываем состояние вызова в массив и если встретилась комбинация 1->7
+                // (вызов отклонили) или 1->4 (трубку подняли) выходим из цикла
+                for (i in 1..durationSeconds) {
+                    val currentState = getCallState()
+                    callStates.add(currentState)
+                    if (callStates.size >= 2) {
+                        val lastIndex = callStates.size - 1
+                        if (callStates[lastIndex - 1] == 1 && (callStates[lastIndex] == 7 || callStates[lastIndex] == 4)) break
+                    }
+                    delay(100) // Фиксируем значения каждые 100мс
+                }
+
+                var isSuccess = false
+
+                // Анализируем весь массив и если встретилась комбинация 9->1 (сеть есть дозвон пошел) выходим из цикла
+                for (i in 0 until callStates.size - 1) {
+                    if (callStates[i] == 9 && callStates[i + 1] == 1) {
+                        isSuccess = true
+                        break
+                    }
+                }
+
+                callStates.clear()
+
+                if (isSuccess) {
+                    if (getCall() != null) DtmfService.callEnd(context)
+                    delay(5000)
+                    speakText("Попытка вызова с ${if (currentSim == 0) "первой" else "второй"} сим карты выполнена успешно")
+                    setInput("")
+                } else {
+                    if (getCall() != null) DtmfService.callEnd(context)
+                    speakText("Попытка вызова с ${if (currentSim == 0) "первой" else "второй"} сим карты не удалась, переместитесь в другое место, здесь нет сигнала базовой станции")
+                    setInput("")
+                }
+
+                // Переключаем на следующую SIM-карту
+                currentSim = if (currentSim == 0) 1 else 0
+
+                // Задержка перед следующим вызовом
+                delay(40000)
+            }
+        }
     }
 
     // Функции для подмены значений частот для двойного частотомера
