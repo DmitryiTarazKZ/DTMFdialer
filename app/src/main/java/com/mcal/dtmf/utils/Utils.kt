@@ -125,12 +125,10 @@ class Utils(
 
     // Дата и время по команде 2*
     fun speakCurrentTime() {
-        // Получаем текущее время
         val currentTime = System.currentTimeMillis()
         val calendar = Calendar.getInstance()
         calendar.timeInMillis = currentTime
 
-        // Извлекаем необходимые компоненты времени и даты
         val hours = calendar.get(Calendar.HOUR_OF_DAY)
         val minutes = calendar.get(Calendar.MINUTE)
         val dayOfWeek =
@@ -138,7 +136,46 @@ class Utils(
         val dayOfMonth = calendar.get(Calendar.DAY_OF_MONTH)
         val month = calendar.getDisplayName(Calendar.MONTH, Calendar.LONG, Locale.getDefault())
 
-        // Форматируем строку для часов
+        val formattedTime = formatRussianTime(hours, minutes)
+        val dayOfMonthString = when (dayOfMonth) {
+            1 -> "первое"
+            2 -> "второе"
+            3 -> "третье"
+            4 -> "четвертое"
+            5 -> "пятое"
+            6 -> "шестое"
+            7 -> "седьмое"
+            8 -> "восьмое"
+            9 -> "девятое"
+            10 -> "десятое"
+            11 -> "одиннадцатое"
+            12 -> "двенадцатое"
+            13 -> "тринадцатое"
+            14 -> "четырнадцатое"
+            15 -> "пятнадцатое"
+            16 -> "шестнадцатое"
+            17 -> "семнадцатое"
+            18 -> "восемнадцатое"
+            19 -> "девятнадцатое"
+            20 -> "двадцатое"
+            21 -> "двадцать первое"
+            22 -> "двадцать второе"
+            23 -> "двадцать третье"
+            24 -> "двадцать четвертое"
+            25 -> "двадцать пятое"
+            26 -> "двадцать шестое"
+            27 -> "двадцать седьмое"
+            28 -> "двадцать восьмое"
+            29 -> "двадцать девятое"
+            30 -> "тридцатое"
+            31 -> "тридцать первое"
+            else -> "$dayOfMonth"
+        }
+
+        mainRepository.speakText("Текущее время $formattedTime. Сегодня $dayOfWeek, $dayOfMonthString $month")
+    }
+
+    fun formatRussianTime(hours: Int, minutes: Int): String {
         val hoursString = when (hours) {
             1 -> "один час"
             2 -> "два часа"
@@ -163,11 +200,10 @@ class Utils(
             21 -> "двадцать один час"
             22 -> "двадцать два часа"
             23 -> "двадцать три часа"
-            0, 24 -> "ноль часов"
+            0 -> "ноль часов"
             else -> "$hours часов"
         }
 
-        // Форматируем строку для минут
         val minutesString = when (minutes) {
             1 -> "одна минута"
             2 -> "две минуты"
@@ -230,43 +266,7 @@ class Utils(
             59 -> "пятьдесят девять минут"
             else -> "$minutes минут"
         }
-
-        // Форматируем строку для дня месяца
-        val dayOfMonthString = when (dayOfMonth) {
-            1 -> "первое"
-            2 -> "второе"
-            3 -> "третье"
-            4 -> "четвертое"
-            5 -> "пятое"
-            6 -> "шестое"
-            7 -> "седьмое"
-            8 -> "восьмое"
-            9 -> "девятое"
-            10 -> "десятое"
-            11 -> "одиннадцатое"
-            12 -> "двенадцатое"
-            13 -> "тринадцатое"
-            14 -> "четырнадцатое"
-            15 -> "пятнадцатое"
-            16 -> "шестнадцатое"
-            17 -> "семнадцатое"
-            18 -> "восемнадцатое"
-            19 -> "девятнадцатое"
-            20 -> "двадцатое"
-            21 -> "двадцать первое"
-            22 -> "двадцать второе"
-            23 -> "двадцать третье"
-            24 -> "двадцать четвертое"
-            25 -> "двадцать пятое"
-            26 -> "двадцать шестое"
-            27 -> "двадцать седьмое"
-            28 -> "двадцать восьмое"
-            29 -> "двадцать девятое"
-            30 -> "тридцатое"
-            31 -> "тридцать первое"
-            else -> "$dayOfMonth"
-        }
-        mainRepository.speakText("Текущее время $hoursString $minutesString. Сегодня $dayOfWeek, $dayOfMonthString $month")
+        return "$hoursString $minutesString"
     }
 
     // Последний вызов: пропущенный (0*) или входящий (0#)

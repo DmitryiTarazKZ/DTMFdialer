@@ -1,6 +1,8 @@
 package com.mcal.dtmf
 
 import android.Manifest
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.app.role.RoleManager
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -12,7 +14,9 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
+import android.provider.Settings
 import android.telecom.TelecomManager
+import android.util.Log
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -26,10 +30,13 @@ import androidx.core.content.ContextCompat
 import cafe.adriel.voyager.navigator.Navigator
 import cafe.adriel.voyager.transitions.SlideTransition
 import com.mcal.dtmf.data.repositories.main.MainRepository
+import com.mcal.dtmf.receiver.AlarmReceiver
 import com.mcal.dtmf.receiver.BootReceiver
 import com.mcal.dtmf.ui.main.MainScreen
 import com.mcal.dtmf.ui.theme.VoyagerDialogTheme
 import org.koin.android.ext.android.inject
+import java.util.Calendar
+
 
 
 class MainActivity : ComponentActivity() {
@@ -95,6 +102,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         checkPermissions()
         offerReplacingDefaultDialer()
+
         setContent {
             VoyagerDialogTheme {
                 MaterialTheme {
@@ -275,6 +283,14 @@ class MainActivity : ComponentActivity() {
             ) == PackageManager.PERMISSION_DENIED
         ) {
             permissionsToRequest.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.SCHEDULE_EXACT_ALARM
+            ) == PackageManager.PERMISSION_DENIED && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+        ) {
+            permissionsToRequest.add(Manifest.permission.SCHEDULE_EXACT_ALARM)
         }
 
         if (permissionsToRequest.isNotEmpty()) {

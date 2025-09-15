@@ -23,6 +23,7 @@ import com.mcal.dtmf.recognizer.DataBlock
 import com.mcal.dtmf.recognizer.Recognizer
 import com.mcal.dtmf.recognizer.Spectrum
 import com.mcal.dtmf.recognizer.StatelessRecognizer
+import com.mcal.dtmf.scheduler.AlarmScheduler
 import com.mcal.dtmf.service.DtmfService
 import com.mcal.dtmf.utils.Utils
 import com.mcal.dtmf.utils.Utils.Companion.batteryStatus
@@ -125,6 +126,7 @@ class MainRepositoryImpl(
     private var callStartTime: Long = 0 // Время начала исходящего вызова
     private var frequencyCount: Int = 0 // Счетчик частот в диапазоне
     private var flagFrequencyCount = false
+    private val alarmScheduler: AlarmScheduler = AlarmScheduler(context = context)
 
     init {
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -1482,9 +1484,35 @@ class MainRepositoryImpl(
                 if (getCall() == null) {
                     setInput("")
 
-                    // свободная команда 1#
-                    if (input == "1" && getCall() == null) {
-                        // СВОБОДНАЯ КОМАНДА!!!!!!!!!!!!   СДЕЛАТЬ БУДИЛЬНИК
+                    // Команда для установки будильника
+                    if (input == "1") {
+                        setInput("")
+                        playSoundJob.launch {
+                            speakText("Установка будильника, введите время в 24-часовом формате")
+                            delay(17000)
+                            val timeInput = getInput()
+                            if (timeInput != null && timeInput.length == 4 && timeInput.all { it.isDigit() }) {
+                                val hours = timeInput.substring(0, 2).toIntOrNull()
+                                val minutes = timeInput.substring(2, 4).toIntOrNull()
+
+                                if (hours != null && minutes != null && hours in 0..23 && minutes in 0..59) {
+                                    alarmScheduler.setAlarm(hours, minutes)
+                                    val formattedTime = utils.formatRussianTime(hours, minutes)
+                                    speakText("Будильник установлен на $formattedTime")
+                                } else {
+                                    speakText("Некорректное время. Часы должны быть от 0 до 23, минуты от 0 до 59.")
+                                }
+                            } else {
+                                speakText("Нужно ввести только 4 цифры")
+                            }
+                            setInput("")
+                        }
+                    }
+
+                    // остановка будильника по команде 00#
+                    else if (input == "00" && getCall() == null) {
+                        alarmScheduler.stopAlarm()
+                        speakText("Будильник отключен")
                     }
 
                     // свободная команда 2#
