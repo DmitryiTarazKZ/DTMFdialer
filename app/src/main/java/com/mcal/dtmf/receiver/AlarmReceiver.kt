@@ -10,7 +10,8 @@ class AlarmReceiver : BroadcastReceiver() {
         context?.let {
             val serviceIntent = Intent(it, AlarmSoundService::class.java)
             serviceIntent.putExtra("ALARM_MESSAGE", intent?.getStringExtra("ALARM_MESSAGE") ?: "Будильник!")
-
+            serviceIntent.putExtra("ALARM_PERIOD", intent?.getLongExtra("ALARM_PERIOD", 60000L) ?: 60000L)
+            serviceIntent.putExtra("ALARM_PART", intent?.getLongExtra("ALARM_PART", 5) ?: 5)
             // Запускаем сервис как обычный фоновый сервис
             it.startService(serviceIntent)
         }

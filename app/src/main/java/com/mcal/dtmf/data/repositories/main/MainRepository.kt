@@ -20,6 +20,14 @@ interface MainRepository {
     fun getVolumeLevelCtcss(): Double
     fun setVolumeLevelCtcss(volumeLevelCtcss: Double)
 
+    fun getPeriodCtcssFlow(): Flow<Int>
+    fun getPeriodCtcss(): Int
+    fun setPeriodCtcss(periodCtcss: Int)
+
+    fun getDurationCtcssFlow(): Flow<Int>
+    fun getDurationCtcss(): Int
+    fun setDurationCtcss(durationCtcss: Int)
+
     fun getCallStateFlow(): Flow<Int>
     fun getCallState(): Int
     fun setCallState(callState: Int)

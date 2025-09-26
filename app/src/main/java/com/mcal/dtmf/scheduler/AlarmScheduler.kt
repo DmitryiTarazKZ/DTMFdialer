@@ -21,7 +21,7 @@ class AlarmScheduler(
 
     private val ALARM_REQUEST_CODE = 1001
 
-    fun setAlarm(hours: Int, minutes: Int) {
+    fun setAlarm(hours: Int, minutes: Int, period: Long, part: Long) {
         val calendar = Calendar.getInstance().apply {
             timeInMillis = System.currentTimeMillis()
             set(Calendar.HOUR_OF_DAY, hours)
@@ -34,7 +34,11 @@ class AlarmScheduler(
             }
         }
 
-        val alarmIntent = Intent(context, AlarmReceiver::class.java)
+        val alarmIntent = Intent(context, AlarmReceiver::class.java).apply {
+            // Добавляем period в Intent
+            putExtra("ALARM_PERIOD", period)
+            putExtra("ALARM_PART", part)
+        }
 
         alarmPendingIntent = PendingIntent.getBroadcast(
             context,

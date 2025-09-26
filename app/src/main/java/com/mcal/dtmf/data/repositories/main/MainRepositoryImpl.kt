@@ -41,6 +41,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.Calendar
 import java.util.Locale
 import java.util.concurrent.LinkedBlockingQueue
 import kotlin.math.abs
@@ -80,6 +81,8 @@ class MainRepositoryImpl(
     private val _selectedSubscriberNumber: MutableStateFlow<Int> = MutableStateFlow(0)
     private val _frequencyCtcss: MutableStateFlow<Double> = MutableStateFlow(0.0)
     private val _volumeLevelCtcss: MutableStateFlow<Double> = MutableStateFlow(0.08)
+    private val _periodCtcss: MutableStateFlow<Int> = MutableStateFlow(0)
+    private val _durationCtcss: MutableStateFlow<Int> = MutableStateFlow(0)
 
 
     private val blockingQueue = LinkedBlockingQueue<DataBlock>()
@@ -96,6 +99,7 @@ class MainRepositoryImpl(
     private var isTorchOnIs = 5 // Задано 5 чтобы исключить случайное срабатывание (Внимание открытый канал...)
     private var isSpeaking = false
     private var lastDialedNumber: String = ""
+    private var monitorNumber: String = "87057895564" // Номер по умолчанию для тестовых звонков для проверки сети
     private var voxActivation = 500L
     private var numberA = ""
     private var numberB = ""
@@ -111,6 +115,7 @@ class MainRepositoryImpl(
     private var dtmfPlaying = false
     private var lastKeyPressTime: Long = 0
     private var flagDoobleClic = 0
+    private var isCommandProcessed = false // Флаг для предотвращения двойного срабатывания по книге контактов и помощи
     private var durationVox = 50L // Длительность активирующего тона для отладки платы VOX
     private var periodVox = 1600L // Длительность периода следования тонов для отладки платы VOX
     private var ton = 0
@@ -121,6 +126,16 @@ class MainRepositoryImpl(
     private val callStates = mutableListOf<Int>() // Список изменений вызова для мониторинга точки установки репитера
     private val durationSeconds = 30000 // Время в течении которого происходит попытка дозвона для мониторинга
     private var isStopRecordingTriggered = false
+
+    private var isContactMode = false // Флаг, который показывает, находимся ли мы в режиме просмотра контактов
+    private var contacts: List<Pair<String, String>> = emptyList() // Список контактов (имя и номер)
+    private var currentContactIndex = -1 // Индекс текущего просматриваемого контакта
+    private var previousContactsSize = 0 // Предыдущий размер списка контактов для отслеживания изменений
+
+    private var isHelpMode = false // Флаг, который показывает, находимся ли мы в режиме просмотра помощи
+    private var sentences = emptyList<String>() // Список всех предложений из файла index.html
+    private var currentSentenceIndex = 0 // Индекс текущего просматриваемого предложения
+
 
 
     private var callStartTime: Long = 0 // Время начала исходящего вызова
@@ -230,6 +245,30 @@ class MainRepositoryImpl(
         _volumeLevelCtcss.update { volumeLevelCtcss }
     }
 
+    override fun getPeriodCtcssFlow(): Flow<Int> = flow {
+        emitAll(_periodCtcss)
+    }
+
+    override fun getPeriodCtcss(): Int {
+        return _periodCtcss.value
+    }
+
+    override fun setPeriodCtcss(periodCtcss: Int) {
+        _periodCtcss.update { periodCtcss }
+    }
+
+    override fun getDurationCtcssFlow(): Flow<Int> = flow {
+        emitAll(_durationCtcss)
+    }
+
+    override fun getDurationCtcss(): Int {
+        return _durationCtcss.value
+    }
+
+    override fun setDurationCtcss(durationCtcss: Int) {
+        _durationCtcss.update { durationCtcss }
+    }
+
     override fun getCallStateFlow(): Flow<Int> = flow {
         emitAll(_callState)
     }
@@ -242,17 +281,18 @@ class MainRepositoryImpl(
 
         if (getFrequencyCtcss() != 0.0 && (callState == 1)) {
             // Генерируем субтон в поток вызова если исходящий
-            utils.playCTCSS(getFrequencyCtcss(), getVolumeLevelCtcss())
+            utils.playCTCSS(getFrequencyCtcss(), getVolumeLevelCtcss(), getPeriodCtcss(),
+                getDurationCtcss())
         }
 
         if (getFrequencyCtcss() != 0.0 && callState == 4) {
             // Поднимаем уровень субтона если абонент поднял трубку на корректирующее значение
             setVolumeLevelCtcss(getVolumeLevelCtcss() + amplitudeCtcssCorrect)
-            utils.playCTCSS(getFrequencyCtcss(), getVolumeLevelCtcss())
+            utils.playCTCSS(getFrequencyCtcss(), getVolumeLevelCtcss(), getPeriodCtcss(),
+                getDurationCtcss())
         }
 
         if (getFrequencyCtcss() != 0.0 && callState == 7) {
-            Log.e("Контрольный лог", "СРАБОТАЛО УСЛОВИЕ")
             // Прекращаем генерацию субтона если вызов и возвращаем уровень на начальное значение
             setVolumeLevelCtcss(getVolumeLevelCtcss() - amplitudeCtcssCorrect / 2) // так как условие срабатывает 2 раза то делим на 2
             utils.stopPlayback()
@@ -482,7 +522,7 @@ class MainRepositoryImpl(
         _outputFrequency.update { outputFrequency }
 
         // Блок отвечает за речевое сообщение: Переместитесь ближе... если нет вызывных гудков (работает при адекватной гальванической связи проверка 55*)
-        if (getCallState() == 1) {
+        if (getCallState() == 1 && block) {
             val currentTime = System.currentTimeMillis()
 
             if (callStartTime == 0L) {
@@ -723,6 +763,8 @@ class MainRepositoryImpl(
             setInput("")
         }
 
+        isCommandProcessed = false
+
         if (key != ' ' && key != previousKey) {
 
             if (flagDtmf && !dtmfPlaying) {
@@ -759,6 +801,22 @@ class MainRepositoryImpl(
                         }
                     }
                 }
+            }
+
+            // Блок обработки шага листания книги контактов или предложений помощи
+            if (isContactMode || isHelpMode) {
+                val delta: Int = when (key) {
+                    '1' -> -1
+                    '7' -> 1
+                    '2' -> -10
+                    '8' -> 10
+                    '3' -> -100
+                    '9' -> 100
+                    '4' -> 40  // Произнесение номера выбранного контакта
+                    '5' -> 30  // Удаление контакта
+                    else -> 0
+                }
+                navigateContactsHelp(delta)
             }
 
             // Обработка нажатий клавиш быстрого набора
@@ -856,7 +914,9 @@ class MainRepositoryImpl(
                 }
             }
 
-            else if (key == '*') {
+            else if (key == '*' && getCall() == null) {
+
+                isContactMode = false // Выход из режима листания контактов
 
                 // Функция, где обрабатываются одиночные/двойные клики:
                 if (flagDoobleClic in 0..1) {
@@ -952,9 +1012,21 @@ class MainRepositoryImpl(
                     }
                 }
 
-                // свободная команда 6*
-                else if (input == "6" && getCall() == null) {
-                // СВОБОДНАЯ КОМАНДА!!!!!!!!!!!!
+                else if (input == "6") {
+
+                    if (!isContactMode) {
+                        contacts = utils.loadContacts(context)
+                        if (contacts.isEmpty()) {
+                            speakText("В телефонной книге нет контактов.")
+                            setInput("")
+                        } else {
+                            isContactMode = true
+                            isHelpMode = false // Запрет на пролистывание помощи
+                            currentContactIndex = -1
+                            speakText("Вы зашли в книгу контактов. Для перемещения по списку контактов, по одному, используйте 7 и 1. по 10 контактов 8 и 2. по 100 контактов 9 и 3")
+                            setInput("")
+                        }
+                    }
                 }
 
                 // Запись голосовой заметки
@@ -964,9 +1036,21 @@ class MainRepositoryImpl(
                     setInput("")
                 }
 
-                // свободная команда
-                else if (input == "8" && getCall() == null) {
-                    // СВОБОДНАЯ КОМАНДА!!!!!!!!!!!
+                // Пролиставание и прослушивание помощи
+                if (input == "8" && block) {
+                    if (!isHelpMode) {
+                        // Загружаем предложения из файла index.html
+                        sentences = utils.loadSentencesFromHtml(context)
+                        if (sentences.isEmpty()) {
+                            speakText("Файл помощи пуст или не найден.")
+                            setInput("")
+                        } else {
+                            isHelpMode = true // Разрешение на пролистывание помоши
+                            currentSentenceIndex = -1
+                            speakText("Вы зашли в раздел помощи. Для перемещения по помощи, по одному предложению, используйте 7 и 1. по 10 предложений, 8 и 2. по 100 предложений, 9 и 3.")
+                            setInput("")
+                        }
+                    }
                 }
 
                 // Воспроизведение голосовой заметки
@@ -997,7 +1081,7 @@ class MainRepositoryImpl(
                                 "Установите нужный период в мили секундах, для настройки и измерения времени удержания вокс")
                             setInput("")
                             delay(16000)
-                            periodVox = getInput()?.toLongOrNull() ?: 1600 // Оптимальное значение при увелечение до 2500 в режиме с одной рацией невозможно принять или прервать вызов
+                            periodVox = getInput()?.toLongOrNull() ?: 1600 // Оптимальное значение при увелечении до 2500 в режиме с одной рацией невозможно принять или прервать вызов
                             if (periodVox < 4001) {
                                 if (periodVox == 1600L) {
                                     speakText("Установлен рекомендуемый период $periodVox милисекунд с длительностью тона $durationVox")
@@ -1282,6 +1366,8 @@ class MainRepositoryImpl(
                         voxActivation = 0
                         setFrequencyCtcss(60.0) // Устанавливаем частоту субтона в 60 герц
                         setVolumeLevelCtcss(0.08) // Устанавливаем амплитуду субтона в 80%
+                        setPeriodCtcss(1000) // Устанавливаем период субтона для удержания VOX
+                        setDurationCtcss(200) // Устанавливаем длительность субтона достаточную для поднятия Vox
                         speakText("Произведено переключение в двухканальный режим, требуется подключение двух радиостанций")
                         setInput("")
                     } else {
@@ -1380,6 +1466,26 @@ class MainRepositoryImpl(
                         setInput1("")
                 }
 
+                // Назначение нового номера на который будет идти дозвон во время проверки наличия сети
+                else if (key == '3' && getCall() == null) {
+                    setInput(getInput1().toString())
+                    val phoneNumberMonitor = getInput()
+                    setInput("")
+                    setInput1("")
+                    if (phoneNumberMonitor?.length == 11) {
+                        val numberMoni = utils.numberToText(phoneNumberMonitor)
+                        monitorNumber = phoneNumberMonitor
+                        speakText("Номер $numberMoni установлен для попыток дозвонится при тестировании есть ли сеть")
+                        setInput("")
+                        setInput1("")
+                    } else {
+                        speakText("В номере должно быть 11 цифр, укажите стандартный сотовый номер")
+                        setInput("")
+                        setInput1("")
+                    }
+                }
+
+
                 // Отправка надиктованного сообщения на набранный номер
                 else if ((key == '4' && getCall() == null) && !getIsRecording()) { // Блокируем команду если идет запись голосовой заметки
                     playSoundJob.launch {
@@ -1471,15 +1577,17 @@ class MainRepositoryImpl(
             else if (key == '#') {
 
                 flagDoobleClic = 0
-                flagAmplitude = false
-                flagFrequency = false
-                flagSelective = false
-                flagSimMonitor = false
+                isHelpMode = false // Выход из режима листания помощи
+                flagAmplitude = false // Выход из режима измерения амплитуды
+                flagFrequency = false // Выход из режима измерения частоты
+                flagSelective = false // Блокировка управления режимом селективного вызова
+                flagSimMonitor = false // Выход из режима попыток дозвониться
+                isContactMode = false // Выход из режима листания контактов
                 setFlagFrequencyLowHigt(false)
-                flagDtmf = false
-                textToSpeech.stop()
+                flagDtmf = false // Отключение генератора двухтональных команд
+                textToSpeech.stop() // Остановка ТТС
                 isSpeaking = false
-                setInput2("")
+                // setInput2("") // Запоминание номера для двойного клика звездочкой
 
                 if (getCall() == null) {
                     setInput("")
@@ -1496,11 +1604,11 @@ class MainRepositoryImpl(
                                 val minutes = timeInput.substring(2, 4).toIntOrNull()
 
                                 if (hours != null && minutes != null && hours in 0..23 && minutes in 0..59) {
-                                    alarmScheduler.setAlarm(hours, minutes)
+                                    alarmScheduler.setAlarm(hours, minutes, 60000L, 5L)
                                     val formattedTime = utils.formatRussianTime(hours, minutes)
-                                    speakText("Будильник установлен на $formattedTime")
+                                    speakText("Будильник установлен на $formattedTime. Для отключения будильника наберите два нуля звездочку")
                                 } else {
-                                    speakText("Некорректное время. Часы должны быть от 0 до 23, минуты от 0 до 59.")
+                                    speakText("Некорректное время. Часы должны быть от 0 до 23, минуты от 0 до 59")
                                 }
                             } else {
                                 speakText("Нужно ввести только 4 цифры")
@@ -1515,9 +1623,49 @@ class MainRepositoryImpl(
                         speakText("Будильник отключен")
                     }
 
-                    // свободная команда 2#
+                    // Маяк для определения зоны покрытия 2#
                     else if (input == "2" && getCall() == null) {
-                        // СВОБОДНАЯ КОМАНДА!!!!!!!!!!!!
+                        playSoundJob.launch {
+                            speakText(
+                                "Вы запускаете маяк для определения зоны действия репитера. Установите время работы в 24-часовом формате")
+                            setInput("")
+                            delay(20000)
+                            val timeInput = getInput()
+
+                            if (timeInput.isNullOrEmpty()) {
+                                val repetitions = 20L
+                                speakText("Маяк запущен по умолчанию на 10 минут. Сигнал будет звучать каждые 30 секунд. Для отключения маяка наберите два нуля звездочку")
+
+                                val calendar = Calendar.getInstance()
+                                calendar.add(Calendar.MINUTE, 1)
+                                val currentHours = calendar.get(Calendar.HOUR_OF_DAY)
+                                val currentMinutes = calendar.get(Calendar.MINUTE)
+
+                                alarmScheduler.setAlarm(currentHours, currentMinutes, 30000L, repetitions)
+
+                            } else if (timeInput.length != 4 || !timeInput.all { it.isDigit() }) {
+                                speakText("Введите 4 цифры")
+                            } else {
+                                val inputHours = timeInput.substring(0, 2).toIntOrNull()
+                                val inputMinutes = timeInput.substring(2, 4).toIntOrNull()
+
+                                if (inputHours != null && inputMinutes != null && inputHours in 0..23 && inputMinutes in 0..59) {
+                                    val totalMinutes = inputHours * 60 + inputMinutes
+                                    val repetitions = (totalMinutes * 60) / 30L
+                                    speakText("Маяк запущен на ${utils.formatRussianTime(inputHours, inputMinutes)}. Сигнал будет звучать каждые 30 секунд. Для отключения маяка наберите два нуля звездочку")
+
+                                    val calendar = Calendar.getInstance()
+                                    calendar.add(Calendar.MINUTE, 1)
+                                    val currentHours = calendar.get(Calendar.HOUR_OF_DAY)
+                                    val currentMinutes = calendar.get(Calendar.MINUTE)
+
+                                    alarmScheduler.setAlarm(currentHours, currentMinutes, 30000L, repetitions)
+                                } else {
+                                    speakText("Некорректное время. Часы должны быть от 0 до 23, минуты от 0 до 59")
+                                }
+                            }
+                            setInput("")
+                        }
                     }
 
                     // Мониторинг сигнала SIM-карт по команде 3#
@@ -1645,11 +1793,18 @@ class MainRepositoryImpl(
 
                     // Откат двухканального режима (возврат к одноканальному)
                     else if (input == "123" && getCall() == null) {
-                        voxActivation = 500
-                        setFrequencyCtcss(0.0)
-                        setVolumeLevelCtcss(0.08)
-                        speakText("Выполнен возврат к одноканальному режиму, достаточно одной радиостанции")
-                        setInput("")
+                        if (getCall() == null && block) {
+                            voxActivation = 500
+                            setFrequencyCtcss(0.0)
+                            setVolumeLevelCtcss(0.08)
+                            setPeriodCtcss(0) // Отключаем прерывистую генерацию субтона
+                            setDurationCtcss(0) // Отключаем прерывистую генерацию субтона
+                            speakText("Выполнен возврат к одноканальному режиму, достаточно одной радиостанции")
+                            setInput("")
+                        } else {
+                            speakText("Команда заблокирована")
+                            setInput("")
+                        }
                     }
 
                     // Удаленная проверка последнего принятого вызова по команде 0#
@@ -1682,7 +1837,8 @@ class MainRepositoryImpl(
                 }
             } else {
                 if (key != 'R' && key != 'S' && key != 'T' && key != 'V') {
-                    setInput(input + key)
+                    if (!isContactMode && !isHelpMode) { // Блокировка печати в режимах пролистывания контактов и помощи
+                        setInput(input + key)}
                 } else {
                     val cameraId = cameraManager.cameraIdList[0]
                     if (!isTorchOn) {
@@ -1794,7 +1950,7 @@ class MainRepositoryImpl(
             var currentSim = 0
 
             while (flagSimMonitor) {
-                setInput("87057895564") // Тестовый звонок будет выполняться на этот номер (можно указать любой)
+                setInput(monitorNumber) // Тестовый звонок будет выполняться на этот номер (можно указать любой)
                 setSim(currentSim)
                 delay(500) // Без этой задержки происходил откат к стандартной звонилке
                 DtmfService.callStart(context)
@@ -1839,6 +1995,107 @@ class MainRepositoryImpl(
 
                 // Задержка перед следующим вызовом
                 delay(40000)
+            }
+        }
+    }
+
+
+    private fun navigateContactsHelp(delta: Int) {
+        // Логика для пролистывания контактов
+        if (delta != 0 && delta != 30 && delta != 40 && !isHelpMode) {
+            val currentContactsSize = contacts.size
+            val wasContactDeleted = (previousContactsSize > 0 && currentContactsSize == previousContactsSize - 1)
+            currentContactIndex = (currentContactIndex + delta) % contacts.size
+
+            if (currentContactIndex < 0) {
+                currentContactIndex += contacts.size
+            }
+
+            val actualIndex = if (wasContactDeleted && delta > 0) {
+                val correctedIndex = if (currentContactIndex > 0) currentContactIndex - 1 else 0
+                correctedIndex
+            } else {
+                currentContactIndex
+            }
+
+            val contact = contacts[actualIndex]
+            val contactName = contact.first
+            val contactNumber = contact.second
+            speakText(contactName)
+            isCommandProcessed = true
+            if (contactNumber.length > 11) {
+                speakText("Выбранный номер не помещается в стандартное поле")
+            } else {
+                setInput(contactNumber)
+            }
+
+            
+            // Обновляем предыдущий размер списка
+            previousContactsSize = currentContactsSize
+
+            // Логика для произнесения номера выбранного контакта
+        } else if (delta == 40 && !isHelpMode) {
+            if (getInput() != "") {
+                speakText(utils.numberToText(getInput().toString()))
+            } else {
+                speakText("Нет выбранного контакта")
+            }
+            isCommandProcessed = true
+
+            // Логика для удаления контактов
+        } else if (delta == 30 && !isHelpMode) {
+            val currentInput = getInput()
+
+            if (currentInput.isNullOrEmpty()) {
+                speakText("Для удаления контакта сначала выберите его из списка")
+                isCommandProcessed = true
+                return
+            }
+
+            if (currentContactIndex >= 0 && currentContactIndex < contacts.size) {
+                val contactName = contacts[currentContactIndex].first
+                val contactNumber = contacts[currentContactIndex].second
+
+                val isDeleted = utils.deleteContactByName(contactName, context)
+
+                if (isDeleted) {
+                    speakText("Контакт $contactName успешно удален из телефонной книги")
+                    previousContactsSize = contacts.size // Сохраняем размер до удаления
+                    contacts = contacts.filterNot { it.first == contactName && it.second == contactNumber }
+
+                    if (contacts.isNotEmpty()) {
+                        if (currentContactIndex >= contacts.size) {
+                            currentContactIndex = contacts.size - 1
+                        }
+                        setInput("")
+                    } else {
+                        speakText("Книга контактов пуста. Удалять больше нечего.")
+                        isContactMode = false
+                        setInput("")
+                    }
+                } else {
+                    speakText("Не удалось удалить контакт")
+                    setInput("")
+                }
+            } else {
+                speakText("Невозможно удалить номер, которого уже нет.")
+            }
+            isCommandProcessed = true
+
+            // Логика для пролистывания помощи/сообщений
+        } else if (isHelpMode) {
+            if (delta != 0) {
+                currentSentenceIndex = (currentSentenceIndex + delta) % sentences.size
+                if (currentSentenceIndex < 0) {
+                    currentSentenceIndex += sentences.size
+                }
+
+                if (currentSentenceIndex >= 0 && currentSentenceIndex < sentences.size) {
+                    val currentSentence = sentences[currentSentenceIndex]
+                    speakText(currentSentence)
+                    isCommandProcessed = true
+                    setInput("")
+                }
             }
         }
     }
@@ -1896,7 +2153,8 @@ class MainRepositoryImpl(
     override fun speakText(text: String) {
 
         // Воспроизводим соответствующий CTCSS (если значение = 0.0 то тон не воспроизводится)
-        if (getFrequencyCtcss() != 0.0) { utils.playCTCSS(getFrequencyCtcss(), getVolumeLevelCtcss()) }
+        if (getFrequencyCtcss() != 0.0) { utils.playCTCSS(getFrequencyCtcss(), getVolumeLevelCtcss(), getPeriodCtcss(),
+            getDurationCtcss()) }
 
         if (isSpeaking) { return }
 

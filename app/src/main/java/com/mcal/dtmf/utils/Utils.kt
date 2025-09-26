@@ -38,10 +38,12 @@ import com.mcal.dtmf.data.repositories.main.MainRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.BufferedReader
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.InputStreamReader
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -378,6 +380,89 @@ class Utils(
             mainRepository.speakText("Ошибка при очистке журнала вызовов")
         } finally {
             mainRepository.setInput("")
+        }
+    }
+
+    // Вспомогательная функция для нормализации номера к формату 87...
+    fun normalizeNumber(number: String): String {
+        // Удаляем все символы, кроме цифр
+        var normalized = number.replace(Regex("[^0-9]"), "")
+
+        // Если номер начинается с +7 или 7, заменяем на 8
+        if (normalized.startsWith("7") && normalized.length == 11) {
+            normalized = "8" + normalized.substring(1)
+        }
+
+        return normalized
+    }
+
+    // Функция загружающая все контакты в список
+    fun loadContacts(context: Context): List<Pair<String, String>> {
+        if (ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.READ_CONTACTS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            mainRepository.speakText("Не получено разрешение на доступ к контактам.")
+            return emptyList()
+        }
+
+        // Используем Map, чтобы избежать дублирования
+        val contactMap = mutableMapOf<String, String>()
+        val contentResolver = context.contentResolver
+        val cursor = contentResolver.query(
+            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+            null,
+            null,
+            null,
+            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC"
+        )
+
+        cursor?.use {
+            val nameIndex = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
+            val numberIndex = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
+            while (it.moveToNext()) {
+                val name = it.getString(nameIndex) ?: "Имя не найдено"
+                val number = it.getString(numberIndex) ?: "Номер не найден"
+
+                // Нормализуем номер перед добавлением
+                val normalizedNumber = normalizeNumber(number)
+
+                // Добавляем контакт в карту, используя нормализованный номер как ключ
+                // Если ключ уже существует, он будет перезаписан (в данном случае это не критично)
+                contactMap[normalizedNumber] = name
+            }
+        }
+
+        // Преобразуем Map обратно в List<Pair>
+        return contactMap.map { it.value to it.key }.toList()
+    }
+
+    fun loadSentencesFromHtml(context: Context): List<String> {
+        val sentences = mutableListOf<String>()
+
+        try {
+            val inputStream = context.assets.open("help/index.html")
+            val reader = BufferedReader(InputStreamReader(inputStream))
+            val htmlContent = reader.readText()
+
+            // 1. Убираем все HTML-теги
+            val cleanText = htmlContent.replace(Regex("<[^>]*>"), "")
+
+            // 2. Нормализуем пробелы и переносы строк, оставляя только один пробел между словами
+            val cleanedText = cleanText.replace(Regex("\\s+"), " ").trim()
+
+            // 3. Разбиваем текст на предложения
+            // Регулярное выражение ищет знаки препинания (. ? !) и разбивает по ним текст.
+            val sentenceRegex = Regex("(?<=[.?!])\\s*")
+            sentences.addAll(cleanedText.split(sentenceRegex))
+
+            // 4. Фильтруем пустые строки
+            return sentences.filter { it.isNotBlank() }
+
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return emptyList()
         }
     }
 
@@ -1059,7 +1144,7 @@ class Utils(
     }
 
     // Генерация субтонов CTCSS для системы непрерывного тонального шумоподавления
-    fun playCTCSS(frequency: Double, volumeLevelCtcss: Double) {
+    fun playCTCSS(frequency: Double, volumeLevelCtcss: Double, periodCtcss: Int, durationCtcss: Int) {
         val sampleRate = 44100 // Частота дискретизации
         val lowCutoffFrequency = frequency * 0.8 // Нижняя частота среза полосового фильтра (например, 80% от частоты)
         val highCutoffFrequency = frequency * 1.2 // Верхняя частота среза полосового фильтра (например, 120% от частоты)
@@ -1133,51 +1218,99 @@ class Utils(
             aHigh[2] = (1 - sqrt(2.0) * wcHigh + wcHigh * wcHigh) * kHigh
 
             scope.launch {
-                while (mainRepository.getIsPlaying() == true) {
-                    for (i in 0 until bufferSize) {
-                        val rawValue = volumeLevelCtcss * sin(angle) // Генерация синусоиды
+                if (periodCtcss == 0 && durationCtcss == 0) {
+                    while (mainRepository.getIsPlaying() == true) {
+                        for (i in 0 until bufferSize) {
+                            val rawValue = volumeLevelCtcss * sin(angle) // Генерация синусоиды
 
-                        // Применение нижнего фильтра Баттерворта
-                        x[0] = rawValue
-                        y[0] = b[0] * x[0] + b[1] * x[1] + b[2] * x[2] - a[1] * y[1] - a[2] * y[2]
-                        // Сдвиг значений
-                        for (j in order downTo 1) {
-                            x[j] = x[j - 1]
-                            y[j] = y[j - 1]
+                            // Применение нижнего фильтра Баттерворта
+                            x[0] = rawValue
+                            y[0] =
+                                b[0] * x[0] + b[1] * x[1] + b[2] * x[2] - a[1] * y[1] - a[2] * y[2]
+                            // Сдвиг значений
+                            for (j in order downTo 1) {
+                                x[j] = x[j - 1]
+                                y[j] = y[j - 1]
+                            }
+
+                            // Применение верхнего фильтра Баттерворта
+                            val filteredValue = y[0]
+                            x[0] = filteredValue
+                            yHigh[0] =
+                                bHigh[0] * x[0] + bHigh[1] * x[1] + bHigh[2] * x[2] - aHigh[1] * yHigh[1] - aHigh[2] * yHigh[2]
+                            // Сдвиг значений для верхнего фильтра
+                            for (j in order downTo 1) {
+                                x[j] = x[j - 1]
+                                yHigh[j] = yHigh[j - 1]
+                            }
+
+                            buffer[i] = yHigh[0].toFloat() // Запись отфильтрованного значения
+                            angle += angleIncrement
+                            if (angle >= 2 * Math.PI) angle -= 2 * Math.PI
                         }
 
-                        // Применение верхнего фильтра Баттерворта
-                        val filteredValue = y[0]
-                        x[0] = filteredValue
-                        yHigh[0] = bHigh[0] * x[0] + bHigh[1] * x[1] + bHigh[2] * x[2] - aHigh[1] * yHigh[1] - aHigh[2] * yHigh[2]
-                        // Сдвиг значений для верхнего фильтра
-                        for (j in order downTo 1) {
-                            x[j] = x[j - 1]
-                            yHigh[j] = yHigh[j - 1]
+                        // Преобразование FloatArray в ByteArray
+                        val byteBuffer = ByteArray(bufferSize * 2)
+                        for (i in buffer.indices) {
+                            val value =
+                                (buffer[i] * 32767).toInt() // Преобразование в 16-битный формат
+                            // Ограничиваем значения, чтобы избежать клиппинга
+                            val clampedValue = value.coerceIn(-32768, 32767)
+                            byteBuffer[2 * i] = (clampedValue and 0xFF).toByte()
+                            byteBuffer[2 * i + 1] = (clampedValue shr 8 and 0xFF).toByte()
                         }
 
-                        buffer[i] = yHigh[0].toFloat() // Запись отфильтрованного значения
-                        angle += angleIncrement
-                        if (angle >= 2 * Math.PI) angle -= 2 * Math.PI
+                        // Запись в AudioTrack с обработкой ошибок
+                        val result = audioTrack?.write(byteBuffer, 0, byteBuffer.size)
+                        if (result == AudioTrack.ERROR_INVALID_OPERATION) {
+                            break
+                        } else if (result == AudioTrack.ERROR) {
+                            break
+                        }
+                    }
+                } else {
+                    // Режим прерывистого тона
+                    val durationSamples = (durationCtcss.toDouble() / 1000.0 * sampleRate).toInt()
+
+                    while (mainRepository.getIsPlaying() == true) {
+                        var samplesWritten = 0
+                        while (samplesWritten < durationSamples && mainRepository.getIsPlaying() == true) {
+                            for (i in 0 until bufferSize) {
+                                val rawValue = volumeLevelCtcss * sin(angle)
+
+                                x[0] = rawValue
+                                y[0] = b[0] * x[0] + b[1] * x[1] + b[2] * x[2] - a[1] * y[1] - a[2] * y[2]
+                                for (j in order downTo 1) {
+                                    x[j] = x[j - 1]
+                                    y[j] = y[j - 1]
+                                }
+                                val filteredValue = y[0]
+                                x[0] = filteredValue
+                                yHigh[0] = bHigh[0] * x[0] + bHigh[1] * x[1] + bHigh[2] * x[2] - aHigh[1] * yHigh[1] - aHigh[2] * yHigh[2]
+                                for (j in order downTo 1) {
+                                    x[j] = x[j - 1]
+                                    yHigh[j] = yHigh[j - 1]
+                                }
+                                buffer[i] = yHigh[0].toFloat()
+                                angle += angleIncrement
+                                if (angle >= 2 * PI) angle -= 2 * PI
+                            }
+                            val byteBuffer = ByteArray(bufferSize * 2)
+                            for (i in buffer.indices) {
+                                val value = (buffer[i] * 32767).toInt()
+                                val clampedValue = value.coerceIn(-32768, 32767)
+                                byteBuffer[2 * i] = (clampedValue and 0xFF).toByte()
+                                byteBuffer[2 * i + 1] = (clampedValue shr 8 and 0xFF).toByte()
+                            }
+                            val result = audioTrack?.write(byteBuffer, 0, byteBuffer.size)
+                            if (result == null || result <= 0) break
+                            samplesWritten += result / 2
+                        }
+
+                        // Пауза (тишина)
+                        delay(periodCtcss.toLong())
                     }
 
-                    // Преобразование FloatArray в ByteArray
-                    val byteBuffer = ByteArray(bufferSize * 2)
-                    for (i in buffer.indices) {
-                        val value = (buffer[i] * 32767).toInt() // Преобразование в 16-битный формат
-                        // Ограничиваем значения, чтобы избежать клиппинга
-                        val clampedValue = value.coerceIn(-32768, 32767)
-                        byteBuffer[2 * i] = (clampedValue and 0xFF).toByte()
-                        byteBuffer[2 * i + 1] = (clampedValue shr 8 and 0xFF).toByte()
-                    }
-
-                    // Запись в AudioTrack с обработкой ошибок
-                    val result = audioTrack?.write(byteBuffer, 0, byteBuffer.size)
-                    if (result == AudioTrack.ERROR_INVALID_OPERATION) {
-                        break
-                    } else if (result == AudioTrack.ERROR) {
-                        break
-                    }
                 }
             }
         }
@@ -1397,7 +1530,9 @@ class Utils(
             if (mainRepository.getFrequencyCtcss() != 0.0) {
                 playCTCSS(
                     mainRepository.getFrequencyCtcss(),
-                    mainRepository.getVolumeLevelCtcss()
+                    mainRepository.getVolumeLevelCtcss(),
+                    mainRepository.getPeriodCtcss(),
+                    mainRepository.getDurationCtcss()
                 )
             }
 
@@ -1491,7 +1626,8 @@ class Utils(
     private fun playAudioFile(path: String, deletesec: Int) {
 
         if (mainRepository.getFrequencyCtcss() != 0.0) {
-            playCTCSS(mainRepository.getFrequencyCtcss(), mainRepository.getVolumeLevelCtcss())
+            playCTCSS(mainRepository.getFrequencyCtcss(), mainRepository.getVolumeLevelCtcss(), mainRepository.getPeriodCtcss(),
+                mainRepository.getDurationCtcss())
         }
 
         val file = File(path)

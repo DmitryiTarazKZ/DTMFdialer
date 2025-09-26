@@ -11,19 +11,22 @@ class AlarmSoundService : Service() {
 
     private var mediaPlayer: MediaPlayer? = null
     private val serviceScope = CoroutineScope(Dispatchers.Main)
+    private var alarmPeriod: Long = 60000L
+    private var alarmPart: Long = 5L
+
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        alarmPeriod = intent?.getLongExtra("ALARM_PERIOD", 60000L) ?: 60000L
+        alarmPart = intent?.getLongExtra("ALARM_PART", 5L) ?: 5L
         playAlarmWithRepetitions()
         return START_NOT_STICKY
     }
 
     private fun playAlarmWithRepetitions() {
         serviceScope.launch {
-            for (pass in 1..5) {
+            for (pass in 1..alarmPart) {
+                if (pass < alarmPart) delay(alarmPeriod)
                 playSound()
-                if (pass < 5) {
-                    delay(60000)
-                }
             }
             stopSelf()
         }
@@ -32,7 +35,14 @@ class AlarmSoundService : Service() {
     private suspend fun playSound() {
         stopAndReleasePlayer()
 
-        mediaPlayer = MediaPlayer.create(applicationContext, R.raw.frog)
+        // Выбираем звуковой файл в зависимости от значения alarmPeriod
+        val soundResId = if (alarmPeriod == 60000L) {
+            R.raw.frog
+        } else {
+            R.raw.alarm
+        }
+
+        mediaPlayer = MediaPlayer.create(applicationContext, soundResId)
         mediaPlayer?.isLooping = false
         mediaPlayer?.start()
 
