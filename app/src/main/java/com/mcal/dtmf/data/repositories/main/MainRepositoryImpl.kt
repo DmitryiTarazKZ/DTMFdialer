@@ -58,6 +58,7 @@ class MainRepositoryImpl(
     private var scope = CoroutineScope(Dispatchers.IO + job)
     private var recorderJob = scope
     private var recognizerJob = scope
+    private var flashlightJob = scope
     private var playSoundJob = scope
 
     private val _spectrum: MutableStateFlow<Spectrum?> = MutableStateFlow(null)
@@ -83,7 +84,12 @@ class MainRepositoryImpl(
     private val _volumeLevelCtcss: MutableStateFlow<Double> = MutableStateFlow(0.08)
     private val _periodCtcss: MutableStateFlow<Int> = MutableStateFlow(0)
     private val _durationCtcss: MutableStateFlow<Int> = MutableStateFlow(0)
-
+    private val _micKeyClick: MutableStateFlow<Int?> = MutableStateFlow(null) // Значение нажатой кнопки гарнитуры
+    private val _timer: MutableStateFlow<Long> = MutableStateFlow(0) // Значение основного таймера
+    private val _isDTMFStarted: MutableStateFlow<Boolean> = MutableStateFlow(false) // включение DTMF
+    private val _magneticField: MutableStateFlow<Boolean?> = MutableStateFlow(null)
+    private val _magneticFieldFlag: MutableStateFlow<Boolean?> = MutableStateFlow(null)
+    private val _statusDtmf: MutableStateFlow<Boolean?> = MutableStateFlow(null)
 
     private val blockingQueue = LinkedBlockingQueue<DataBlock>()
     private val recognizer = Recognizer()
@@ -141,7 +147,7 @@ class MainRepositoryImpl(
     private var callStartTime: Long = 0 // Время начала исходящего вызова
     private var frequencyCount: Int = 0 // Счетчик частот в диапазоне
     private var flagFrequencyCount = false
-    private val alarmScheduler: AlarmScheduler = AlarmScheduler(context = context)
+    private val alarmScheduler: AlarmScheduler = AlarmScheduler(context = context) // Будильник
 
     init {
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -334,11 +340,12 @@ class MainRepositoryImpl(
         return _input.value
     }
 
-    override fun setInput(value: String) {
+    override fun setInput(value: String, withoutTimer: Boolean) {
         if (flagDtmf) {
             _input.update { "${durationVox}ms ${getVolumeLevelTts().toInt()}%" }
         } else {
-            _input.update { value }
+                _input.update { value }
+                if (getMagneticFieldFlag()) setTimer(30000) // продление таймера от любой команды
         }
     }
 
@@ -380,6 +387,63 @@ class MainRepositoryImpl(
         _input2.update { value }
     }
 
+    override fun getMagneticFieldFlow(): Flow<Boolean> = flow {
+        if (_magneticField.value == null) {
+            try {
+                getMagneticField()
+            } catch (ex: Exception) {
+                ex.printStackTrace()
+            }
+        }
+        emitAll(_magneticField.filterNotNull())
+    }
+
+    override fun getMagneticField(): Boolean {
+        return _magneticField.value ?: false
+    }
+
+    override fun setMagneticField(value: Boolean) {
+        _magneticField.update { value }
+    }
+
+    override fun getMagneticFieldFlagFlow(): Flow<Boolean> = flow {
+        if (_magneticFieldFlag.value == null) {
+            try {
+                getMagneticFieldFlag()
+            } catch (ex: Exception) {
+                ex.printStackTrace()
+            }
+        }
+        emitAll(_magneticFieldFlag.filterNotNull())
+    }
+
+    override fun getMagneticFieldFlag(): Boolean {
+        return _magneticFieldFlag.value ?: false
+    }
+
+    override fun setMagneticFieldFlag(value: Boolean) {
+        _magneticFieldFlag.update { value }
+    }
+
+    override fun getStatusDtmfFlow(): Flow<Boolean> = flow {
+        if (_statusDtmf.value == null) {
+            try {
+                getStatusDtmf()
+            } catch (ex: Exception) {
+                ex.printStackTrace()
+            }
+        }
+        emitAll(_statusDtmf.filterNotNull())
+    }
+
+    override fun getStatusDtmf(): Boolean {
+        return _statusDtmf.value ?: false
+    }
+
+    override fun setStatusDtmf(value: Boolean) {
+        _statusDtmf.update { value }
+    }
+
     override fun getPowerFlow(): Flow<Boolean> = flow {
         if (_powerState.value == null) {
             try {
@@ -404,6 +468,71 @@ class MainRepositoryImpl(
             speakText("Питание устройства возобновлено. Аккумулятор смартфона заряжается")
         }
         _powerState.update { value }
+    }
+
+    // Значение клавиш гарнитуры 79(центральная),25(вверх),24(вниз)
+    override fun getMicKeyClickFlow(): Flow<Int> = flow {
+        if (_micKeyClick.value == null) {
+            try {
+                getMicKeyClick()
+            } catch (ex: Exception) {
+                ex.printStackTrace()
+            }
+        }
+        emitAll(_micKeyClick.filterNotNull())
+    }
+
+    override fun getMicKeyClick(): Int? {
+        return _micKeyClick.value
+    }
+
+    override fun setMicKeyClick(value: Int) {
+        _micKeyClick.update { value }
+    }
+
+    // Значение основного таймера
+    override fun getTimerFlow(): Flow<Long> = flow {
+        emitAll(_timer)
+    }
+
+    override fun getTimer(): Long {
+        return _timer.value
+    }
+
+    override fun setTimer(duration: Long) {
+        _timer.update { duration }
+    }
+
+    // Основная логика работы таймера
+
+    override fun getStartDtmfFlow(): Flow<Boolean> = flow {
+        emitAll(_isDTMFStarted)
+    }
+
+    override fun getStartDtmf(): Boolean {
+        return _isDTMFStarted.value
+    }
+
+    override fun setStartDtmf(enabled: Boolean) {
+      //  Log.d("Контрольный лог", "setStartDtmf $enabled")
+        if (enabled) {
+            startDtmf()
+            flashlightJob.launch {
+                var timer: Long
+                do {
+                    timer = getTimer()
+                    if (timer != 0L) {
+                        if (getCallState() == 7) {
+                            setTimer(timer - 1000)
+                        }
+                        delay(1000)
+                    }
+                } while (timer > 0)
+                  stopDtmf()
+            }
+        } else {
+           stopDtmf()
+        }
     }
 
     override fun getIsRecordingFlow(): Flow<Boolean> = flow {
@@ -803,17 +932,17 @@ class MainRepositoryImpl(
                 }
             }
 
-            // Блок обработки шага листания книги контактов или предложений помощи
+            // Блок обработки шага листания книги контактов или предложений раздела помощи
             if (isContactMode || isHelpMode) {
                 val delta: Int = when (key) {
-                    '1' -> -1
-                    '7' -> 1
-                    '2' -> -10
-                    '8' -> 10
-                    '3' -> -100
-                    '9' -> 100
-                    '4' -> 40  // Произнесение номера выбранного контакта
-                    '5' -> 30  // Удаление контакта
+                    '1' -> -1    // Листание на 1 контакт или предложение назад
+                    '7' -> 1     // Листание на 1 контакт или предложение вперед
+                    '2' -> -10   // Листание на 10 контактов или предложений назад
+                    '8' -> 10    // Листание на 10 контактов или предложений вперед
+                    '3' -> -100  // Листание на 100 контактов или предложений назад
+                    '9' -> 100   // Листание на 100 контактов или предложений вперед
+                    '4' -> 40    // Произнесение номера выбранного контакта
+                    '5' -> 30    // Удаление контакта
                     else -> 0
                 }
                 navigateContactsHelp(delta)
@@ -914,7 +1043,7 @@ class MainRepositoryImpl(
                 }
             }
 
-            else if (key == '*' && getCall() == null) {
+            else if (key == '*') {
 
                 isContactMode = false // Выход из режима листания контактов
 
@@ -956,7 +1085,6 @@ class MainRepositoryImpl(
                 // Удаленная проверка пропущенного вызова по команде 0*
                 else if (input == "0" && getCall() == null) {
                     utils.lastMissed(context, true)
-                    setInput("")
                 }
 
                 // Удаленное сообщение о текущем времени по команде 1*
@@ -1037,7 +1165,7 @@ class MainRepositoryImpl(
                 }
 
                 // Пролиставание и прослушивание помощи
-                if (input == "8" && block) {
+                else if (input == "8" && getCall() == null) {
                     if (!isHelpMode) {
                         // Загружаем предложения из файла index.html
                         sentences = utils.loadSentencesFromHtml(context)
@@ -1046,8 +1174,8 @@ class MainRepositoryImpl(
                             setInput("")
                         } else {
                             isHelpMode = true // Разрешение на пролистывание помоши
-                            currentSentenceIndex = -1
-                            speakText("Вы зашли в раздел помощи. Для перемещения по помощи, по одному предложению, используйте 7 и 1. по 10 предложений, 8 и 2. по 100 предложений, 9 и 3.")
+                            currentSentenceIndex = 201
+                            speakText("Вы перешли к описанию команд репитера. Для перемещения по описанию, по одному предложению, используйте 7 и 1. по 10 предложений, 8 и 2. по 100 предложений, 9 и 3.")
                             setInput("")
                         }
                     }
@@ -1360,6 +1488,19 @@ class MainRepositoryImpl(
                     }
                 }
 
+                // Переключение в режим экономии батареи
+                else if (input == "100") {
+                    if (getCall() == null && block) {
+                        if (getStatusDtmf()) stopDtmf()
+                        setMagneticFieldFlag(true)
+                        speakText("Включена экономия заряда батареи, требуется кабель с магнитной катушкой, ДЭ ТЭ МЭ ЭФ распознавание будет запускаться от изменения магнитного поля")
+                        setInput("")
+                    } else {
+                        speakText("Команда заблокирована")
+                        setInput("")
+                    }
+                }
+
                 // Переключение в двухканальный режим
                 else if (input == "123") {
                     if (getCall() == null && block) {
@@ -1587,7 +1728,7 @@ class MainRepositoryImpl(
                 flagDtmf = false // Отключение генератора двухтональных команд
                 textToSpeech.stop() // Остановка ТТС
                 isSpeaking = false
-                // setInput2("") // Запоминание номера для двойного клика звездочкой
+                // setInput2("") // Стирание номера запомненного при двойном клике звездочкой
 
                 if (getCall() == null) {
                     setInput("")
@@ -1596,7 +1737,7 @@ class MainRepositoryImpl(
                     if (input == "1") {
                         setInput("")
                         playSoundJob.launch {
-                            speakText("Установка будильника, введите время в 24-часовом формате")
+                            speakText("Установка будильника, введите время срабатывания в 24-часовом формате")
                             delay(17000)
                             val timeInput = getInput()
                             if (timeInput != null && timeInput.length == 4 && timeInput.all { it.isDigit() }) {
@@ -1606,7 +1747,7 @@ class MainRepositoryImpl(
                                 if (hours != null && minutes != null && hours in 0..23 && minutes in 0..59) {
                                     alarmScheduler.setAlarm(hours, minutes, 60000L, 5L)
                                     val formattedTime = utils.formatRussianTime(hours, minutes)
-                                    speakText("Будильник установлен на $formattedTime. Для отключения будильника наберите два нуля звездочку")
+                                    speakText("Будильник сработает в $formattedTime. Для отключения будильника наберите два нуля решетку")
                                 } else {
                                     speakText("Некорректное время. Часы должны быть от 0 до 23, минуты от 0 до 59")
                                 }
@@ -1617,10 +1758,15 @@ class MainRepositoryImpl(
                         }
                     }
 
+                    // Удаленная проверка последнего принятого вызова по команде 0#
+                    else if (input == "0" && getCall() == null) {
+                        utils.lastMissed(context, false)
+                    }
+
                     // остановка будильника по команде 00#
                     else if (input == "00" && getCall() == null) {
                         alarmScheduler.stopAlarm()
-                        speakText("Будильник отключен")
+                        speakText("Будильник и маяк отключены")
                     }
 
                     // Маяк для определения зоны покрытия 2#
@@ -1634,7 +1780,7 @@ class MainRepositoryImpl(
 
                             if (timeInput.isNullOrEmpty()) {
                                 val repetitions = 20L
-                                speakText("Маяк запущен по умолчанию на 10 минут. Сигнал будет звучать каждые 30 секунд. Для отключения маяка наберите два нуля звездочку")
+                                speakText("Маяк запущен по умолчанию на 10 минут. Сигнал будет звучать каждые 30 секунд. Для отключения маяка наберите два нуля решетку")
 
                                 val calendar = Calendar.getInstance()
                                 calendar.add(Calendar.MINUTE, 1)
@@ -1652,7 +1798,7 @@ class MainRepositoryImpl(
                                 if (inputHours != null && inputMinutes != null && inputHours in 0..23 && inputMinutes in 0..59) {
                                     val totalMinutes = inputHours * 60 + inputMinutes
                                     val repetitions = (totalMinutes * 60) / 30L
-                                    speakText("Маяк запущен на ${utils.formatRussianTime(inputHours, inputMinutes)}. Сигнал будет звучать каждые 30 секунд. Для отключения маяка наберите два нуля звездочку")
+                                    speakText("Маяк запущен на ${utils.formatRussianTime(inputHours, inputMinutes)}. Сигнал будет звучать каждые 30 секунд. Для отключения маяка наберите два нуля решетку")
 
                                     val calendar = Calendar.getInstance()
                                     calendar.add(Calendar.MINUTE, 1)
@@ -1724,9 +1870,21 @@ class MainRepositoryImpl(
                         setInput("")
                     }
 
-                    // свободная команда
+                    // Пролиставание и прослушивание помощи
                     else if (input == "8" && getCall() == null) {
-                        //СВОБОДНАЯ КОМАНДА!!!!!!!!!!!!!
+                        if (!isHelpMode) {
+                            // Загружаем предложения из файла index.html
+                            sentences = utils.loadSentencesFromHtml(context)
+                            if (sentences.isEmpty()) {
+                                speakText("Файл помощи пуст или не найден.")
+                                setInput("")
+                            } else {
+                                isHelpMode = true // Разрешение на пролистывание помоши
+                                currentSentenceIndex = -1
+                                speakText("Вы зашли в полный раздел описания функциональности репитера. Для перемещения по описанию, по одному предложению, используйте 7 и 1. по 10 предложений, 8 и 2. по 100 предложений, 9 и 3.")
+                                setInput("")
+                            }
+                        }
                     }
 
                     // Удаление голосовой заметки 99999#
@@ -1791,6 +1949,19 @@ class MainRepositoryImpl(
                         }
                     }
 
+                    // Отключение режима экономии батареи
+                    else if (input == "100") {
+                        if (getCall() == null && block) {
+                            if (!getStatusDtmf()) startDtmf()
+                            setMagneticFieldFlag(false)
+                            speakText("Отключена экономия заряда батареи, ДЭ ТЭ МЭ ЭФ распознавание работает в непрерывном цикле")
+                            setInput("")
+                        } else {
+                            speakText("Команда заблокирована")
+                            setInput("")
+                        }
+                    }
+
                     // Откат двухканального режима (возврат к одноканальному)
                     else if (input == "123" && getCall() == null) {
                         if (getCall() == null && block) {
@@ -1805,12 +1976,6 @@ class MainRepositoryImpl(
                             speakText("Команда заблокирована")
                             setInput("")
                         }
-                    }
-
-                    // Удаленная проверка последнего принятого вызова по команде 0#
-                    else if (input == "0" && getCall() == null) {
-                        utils.lastMissed(context, false)
-                        setInput("")
                     }
 
                     // Очистка всего журнала вызовов по команде 00000#
@@ -1913,11 +2078,14 @@ class MainRepositoryImpl(
 
     // Запуск дтмф анализа
     override fun startDtmf() {
+        setStatusDtmf(true)
+        Log.d("Контрольный лог", "startDtmf()")
         DtmfService.start(context)
         initJob()
         setInput("")
         recorderJob.launch { record() }
         recognizerJob.launch { recognize() }
+        if (getMagneticFieldFlag()) { setTimer(30000) }
     }
 
     private fun initJob() {
@@ -1925,11 +2093,14 @@ class MainRepositoryImpl(
         scope = CoroutineScope(Dispatchers.IO + job)
         recorderJob = scope
         recognizerJob = scope
+        flashlightJob = scope
         playSoundJob = scope
     }
 
     // Остановка дтмф анализа
     override fun stopDtmf() {
+        setStatusDtmf(false)
+        Log.d("Контрольный лог", "stopDtmf()")
         setInput("")
         isSpeaking = false
         job.cancel()
@@ -1938,6 +2109,8 @@ class MainRepositoryImpl(
         blockingQueue.clear()
         recognizer.clear()
         DtmfService.stop(context)
+        if (getMagneticFieldFlag()) { setTimer(0) }
+        setInput("")
     }
 
     // Функция мониторинга возможности выполнить вызов для нахождения точки установки репитера

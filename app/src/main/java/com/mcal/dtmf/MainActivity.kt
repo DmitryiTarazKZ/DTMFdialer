@@ -1,22 +1,24 @@
 package com.mcal.dtmf
 
 import android.Manifest
-import android.app.AlarmManager
-import android.app.PendingIntent
 import android.app.role.RoleManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.media.AudioManager
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
-import android.provider.Settings
 import android.telecom.TelecomManager
 import android.util.Log
+import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -30,20 +32,61 @@ import androidx.core.content.ContextCompat
 import cafe.adriel.voyager.navigator.Navigator
 import cafe.adriel.voyager.transitions.SlideTransition
 import com.mcal.dtmf.data.repositories.main.MainRepository
-import com.mcal.dtmf.receiver.AlarmReceiver
 import com.mcal.dtmf.receiver.BootReceiver
 import com.mcal.dtmf.ui.main.MainScreen
 import com.mcal.dtmf.ui.theme.VoyagerDialogTheme
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
-import java.util.Calendar
-
-
 
 class MainActivity : ComponentActivity() {
     private val mainRepository: MainRepository by inject()
     private val permissionCode = 100
     private var wakeLock: PowerManager.WakeLock? = null
     private var isAppInForeground = false
+
+    private lateinit var sensorManager: SensorManager
+    private var magneticFieldSensor: Sensor? = null
+
+    private val shangeThreshold= 5.0f
+    private var lastMagneticFieldY = 0.0f
+    private var isDebouncing = false
+    private val debounceDelay = 100L
+    private val scope = CoroutineScope(Dispatchers.Default)
+
+    private val sensorListener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent?) {
+            if (isDebouncing) return  // Защита от дребезга датчика (предотвращение двойного запуска DTMF)
+
+            if (event?.sensor?.type == Sensor.TYPE_MAGNETIC_FIELD) {
+                val magneticFieldY = event.values[1]
+
+                // Проверка порога изменения (EDGE TRIGGER)
+                if (Math.abs(magneticFieldY - lastMagneticFieldY) >= shangeThreshold) {
+
+                    if (mainRepository.getTimer() == 30000L) {
+                        // Используем Debounce, который вы уже настроили
+                        isDebouncing = true
+                        // Log.e("Контрольный лог", "++++++++ (ФАКТ ИЗМЕНЕНИЯ ПОЛЯ)")
+                        if (mainRepository.getMagneticFieldFlag() == true) {
+                            mainRepository.setStartDtmf(!mainRepository.getStartDtmf())
+                        }
+                        scope.launch {
+                            delay(debounceDelay)
+                            isDebouncing = false
+                        }
+                    }
+                    lastMagneticFieldY = magneticFieldY
+                }
+            }
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
+            // Не требуется
+        }
+    }
 
     private val powerReceiver: BroadcastReceiver = object : BootReceiver() {
         override fun onReceive(context: Context, intent: Intent?) {
@@ -98,11 +141,33 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        when (keyCode) {
+            KeyEvent.KEYCODE_HEADSETHOOK -> {
+                mainRepository.setMicKeyClick(0)
+                return true
+            }
+            else -> return super.onKeyUp(keyCode, event)
+        }
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        super.onKeyUp(keyCode, event)
+        when (keyCode) {
+            KeyEvent.KEYCODE_HEADSETHOOK -> {
+                mainRepository.setMicKeyClick(KeyEvent.KEYCODE_HEADSETHOOK)
+                return true
+            }
+            else -> return super.onKeyDown(keyCode, event)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         checkPermissions()
         offerReplacingDefaultDialer()
-
+        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        magneticFieldSensor = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
         setContent {
             VoyagerDialogTheme {
                 MaterialTheme {
@@ -312,6 +377,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // 3. Регистрация слушателя датчика при возобновлении
+        magneticFieldSensor?.let {
+            sensorManager.registerListener(
+                sensorListener,
+                it,
+                SensorManager.SENSOR_DELAY_UI // Оптимальная задержка
+            )
+        }
         isAppInForeground = true
     }
 

@@ -32,6 +32,7 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.telephony.SmsManager
+import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.mcal.dtmf.data.repositories.main.MainRepository
@@ -330,6 +331,7 @@ class Utils(
 
                     if (!isIncomingAccepted) {
                         // Озвучивание для пропущенного вызова и подготовка номера
+                        Log.e("Контрольный лог", "ИМЯ1: $contactName НОМЕР1 $normalizedNumber")
                         mainRepository.speakText(
                             "Последний пропущенный вызов был от абонента $contactName... он звонил в $timeText... " +
                                     "Если Вы хотите перезвонить, нажмите звездочку. Для отмены нажмите решетку. Также Вы можете " +
@@ -338,6 +340,7 @@ class Utils(
                         mainRepository.setInput(normalizedNumber)
                     } else {
                         // Озвучивание для принятого входящего вызова и подготовка номера
+                        Log.e("Контрольный лог", "ИМЯ2: $contactName НОМЕР2 $normalizedNumber")
                         mainRepository.speakText(
                             "Последний входящий вызов был от абонента $contactName... он звонил в $timeText... " +
                                     "Если Вы хотите перезвонить, нажмите звездочку. Для отмены нажмите решетку. Также Вы можете " +

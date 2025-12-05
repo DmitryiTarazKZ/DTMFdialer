@@ -24,7 +24,12 @@ class MainViewModel(
             outputFrequencyHigh = mainRepository.getOutputFrequencyHigh(),
             frequencyCtcss = mainRepository.getFrequencyCtcss(),
             volumeLevelCtcss = mainRepository.getVolumeLevelCtcss(),
-            isPlaying = mainRepository.getIsPlaying() ?: false
+            isPlaying = mainRepository.getIsPlaying() ?: false,
+            micClickKeyCode = mainRepository.getMicKeyClick() ?: 0,
+            timer = mainRepository.getTimer(),
+            magneticField = mainRepository.getMagneticField() ?: false,
+            magneticFieldFlag = mainRepository.getMagneticFieldFlag() ?: false,
+            statusDtmf = mainRepository.getStatusDtmf() ?: false
         )
     )
     val screenState = _screenState.asStateFlow()
@@ -89,6 +94,30 @@ class MainViewModel(
             }
         }.launchIn(screenModelScope)
 
+        mainRepository.getMagneticFieldFlow().map { value ->
+            _screenState.update {
+                it.copy(
+                    magneticField = value
+                )
+            }
+        }.launchIn(screenModelScope)
+
+        mainRepository.getStatusDtmfFlow().map { value ->
+            _screenState.update {
+                it.copy(
+                    statusDtmf = value
+                )
+            }
+        }.launchIn(screenModelScope)
+
+        mainRepository.getMagneticFieldFlagFlow().map { value ->
+            _screenState.update {
+                it.copy(
+                    magneticFieldFlag = value
+                )
+            }
+        }.launchIn(screenModelScope)
+
         mainRepository.getOutputFrequencyFlow().map { value ->
             _screenState.update {
                 it.copy(
@@ -125,6 +154,22 @@ class MainViewModel(
             _screenState.update {
                 it.copy(
                     volumeLevelCtcss = value
+                )
+            }
+        }.launchIn(screenModelScope)
+
+        mainRepository.getMicKeyClickFlow().map { test ->
+            _screenState.update {
+                it.copy(
+                    micClickKeyCode = test
+                )
+            }
+        }.launchIn(screenModelScope)
+
+        mainRepository.getTimerFlow().map { timer ->
+            _screenState.update {
+                it.copy(
+                    timer = timer
                 )
             }
         }.launchIn(screenModelScope)

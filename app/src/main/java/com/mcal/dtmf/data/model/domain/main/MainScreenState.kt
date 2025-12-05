@@ -15,10 +15,15 @@ data class MainScreenState(
     val amplitudeCheck: Boolean = false, // Флаг проверки амплитуды
     val isRecording: Boolean = false, // Флаг определения отпускания PTT при записи голосовой заметки
     val flagFrequencyLowHigt: Boolean = false, // Флаг для отображения верней и нижней частоты DTMF
+    val magneticField: Boolean = false, // Индикатор наличия магнитного поля
+    val magneticFieldFlag: Boolean = false, // Флаг режима старта DTMF от магнитного поля
     val outputFrequency: Float = 0f, // Получение частоты с блока распознавания
     val outputFrequencyLow: Float = 0f, // Получение нижней частоты с блока распознавания
     val outputFrequencyHigh: Float = 0f, // Получение верхней частоты с блока распознавания
     val frequencyCtcss: Double = 0.0, // Значение частоты субтона
     val volumeLevelCtcss: Double = 0.08, // Уровень громкости субтона
-    val isPlaying: Boolean = false
+    val isPlaying: Boolean = false,
+    val micClickKeyCode: Int = 0, // Значение кодов нажатия кнопок на гарнитуре
+    val timer: Long = 0, // Значение основного таймера
+    var statusDtmf: Boolean = false
 )

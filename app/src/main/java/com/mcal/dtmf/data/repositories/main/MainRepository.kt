@@ -38,7 +38,7 @@ interface MainRepository {
 
     fun getInputFlow(): Flow<String>
     fun getInput(): String?
-    fun setInput(value: String)
+    fun setInput(value: String, withoutTimer: Boolean = false)
 
     fun getInput1Flow(): Flow<String>
     fun getInput1(): String?
@@ -48,9 +48,33 @@ interface MainRepository {
     fun getInput2(): String?
     fun setInput2(value: String)
 
+    fun getMagneticFieldFlow(): Flow<Boolean>
+    fun getMagneticField(): Boolean?
+    fun setMagneticField(value: Boolean)
+
+    fun getMagneticFieldFlagFlow(): Flow<Boolean>
+    fun getMagneticFieldFlag(): Boolean?
+    fun setMagneticFieldFlag(value: Boolean)
+
+    fun getStatusDtmfFlow(): Flow<Boolean>
+    fun getStatusDtmf(): Boolean?
+    fun setStatusDtmf(value: Boolean)
+
     fun getPowerFlow(): Flow<Boolean>
     fun getPower(): Boolean?
     fun setPower(value: Boolean)
+
+    fun getMicKeyClickFlow(): Flow<Int>
+    fun getMicKeyClick(): Int?
+    fun setMicKeyClick(value: Int)
+
+    fun getTimerFlow(): Flow<Long>
+    fun getTimer(): Long
+    fun setTimer(duration: Long)
+
+    fun getStartDtmfFlow(): Flow<Boolean>
+    fun getStartDtmf(): Boolean
+    fun setStartDtmf(enabled: Boolean)
 
     fun getIsRecordingFlow(): Flow<Boolean>
     fun getIsRecording(): Boolean?
