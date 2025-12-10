@@ -89,6 +89,7 @@ class MainRepositoryImpl(
     private val _isDTMFStarted: MutableStateFlow<Boolean> = MutableStateFlow(false) // включение DTMF
     private val _magneticField: MutableStateFlow<Boolean?> = MutableStateFlow(null)
     private val _magneticFieldFlag: MutableStateFlow<Boolean?> = MutableStateFlow(null)
+    private val _flashlight: MutableStateFlow<Boolean?> = MutableStateFlow(null)
     private val _statusDtmf: MutableStateFlow<Boolean?> = MutableStateFlow(null)
 
     private val blockingQueue = LinkedBlockingQueue<DataBlock>()
@@ -104,6 +105,7 @@ class MainRepositoryImpl(
     private var amplitudeCtcssCorrect: Double = 0.02 // Корректирующее значения прибавляется к установленному уровню в момент поднятия трубки
     private var isTorchOnIs = 5 // Задано 5 чтобы исключить случайное срабатывание (Внимание открытый канал...)
     private var isSpeaking = false
+    private var currentTorchState: Boolean? = null  // Текущее состояние вспышки для оптимизации (централизованное управление)
     private var lastDialedNumber: String = ""
     private var monitorNumber: String = "87057895564" // Номер по умолчанию для тестовых звонков для проверки сети
     private var voxActivation = 500L
@@ -117,8 +119,10 @@ class MainRepositoryImpl(
     private var flagSimMonitor = false
     private var flagFrequency = false
     private var flagDtmf = false
+    private var flagFlashLight = false
     private var flagSelective = false
     private var dtmfPlaying = false
+    private var isProgrammingMode = false
     private var lastKeyPressTime: Long = 0
     private var flagDoobleClic = 0
     private var isCommandProcessed = false // Флаг для предотвращения двойного срабатывания по книге контактов и помощи
@@ -139,8 +143,57 @@ class MainRepositoryImpl(
     private var previousContactsSize = 0 // Предыдущий размер списка контактов для отслеживания изменений
 
     private var isHelpMode = false // Флаг, который показывает, находимся ли мы в режиме просмотра помощи
-    private var sentences = emptyList<String>() // Список всех предложений из файла index.html
+    private var sentences = emptyList<String>() // Список всех предложений помощи
     private var currentSentenceIndex = 0 // Индекс текущего просматриваемого предложения
+
+    private var smsNavigationIndex: Int = -1 // -1 означает, что навигация не активна, 0 — самое новое SMS.
+    private var totalSmsCount: Int = 0      // Общее количество SMS, для проверки границ.
+    private var prefix = ""
+    
+    // Локальный список предложений помощи (команды репитера)
+    private fun getHelpSentences(): List<String> {
+        return listOf(
+            "PTT плюс ноль звездочка, Последний входящий вызов.",
+            "PTT плюс ноль решетка, Последний пропущенный вызов.",
+            "PTT плюс пять нулей решетка, Очистить весь журнал вызовов.",
+            "PTT плюс один звездочка, Текущие время и дата.",
+            "PTT плюс один решетка, Будильник, отключение PTT плюс два нуля решетка.",
+            "PTT плюс два звездочка, Состояние аккумулятора.",
+            "PTT плюс два решетка, Маяк, отключение PTT плюс два нуля решетка.",
+            "PTT плюс три звездочка, Уровни сети обеих сим карт.",
+            "PTT плюс три решетка, Запуск мониторинга есть ли сеть, работает со сбоями.",
+            "PTT плюс четыре звездочка, пролистывание вверх по списку СМС.",
+            "PTT плюс четыре решетка, пролистывание вниз по списку СМС.",
+            "PTT плюс пять звездочка, Голосовой поиск абонента в контактах с последующим вызовом, при наличии интернета.",
+            "PTT плюс пять решетка, Голосовой поиск абонента в контактах с последующим удалением, при наличии интернета.",
+            "PTT плюс шесть звездочка, Вход в книгу контактов с пролистыванием с выбранным шагом. В этом режиме PTT плюс четыре, прослушать номер, PTT плюс пять, удаление выбранного контакта, PTT плюс звездочка, позвонить, PTT плюс решетка, выход из режима.",
+            "PTT плюс шесть решетка, Команда не назначена.",
+            "PTT плюс семь звездочка, Создание голосовых заметок. Настройте точку амплитуды командой PTT плюс сорок шесть звездочка для автоматической остановки или после окончания произнесения не отпуская PTT надо нажать решетку для остановки вручную.",
+            "В первую очередь предназначена для проверки качества прохождения сигнала: абонент к репитеру и наоборот, так как по команде девять звездочка можно прослушивать самого себя. Если при воспроизведении ВОКС отключается можно поднять громкость радиостанции репитера.",
+            "А также проверке на наличии искажений и шумов. Можно записать контрольную заметку при отключенном аудиокабеле звук запишется максимально чистым и потом записать вторую заметку уже все подключив и говоря в рацию абонента а затем сравнить записи.",
+            "Если отличий практически нету это указывает на правильные уровни громкости и то что качество выбранной радиостанции репитера высокое. Если вторая запись прослушивается намного хуже чем первая, например при прослушивании присутствуют шум, свист, искажения или посторонние звуки это может говорить о том что радиостанцию репитера желательно заменить.",
+            "Можно использовать для определения точек где связь не стабильна, называя место и номер записи. Или как голосовая записная книжка.",
+            "Также если в радиусе действия репитера находится несколько радиостанций то можно использовать эту команду для отправки голосовых сообщений называя адресата а затем он на своей рации сможет прослушать адресованное ему сообщение и наоборот.",
+            "Либо включив селективную отправку сообщений командой сто одиннадцать PTT плюс F и настроив субтона и вызывные тона на каждой из четырех радиостанций.",
+            "Также при подключенном аудиокабеле режим позволяет проверить отключается ли микрофон смартфона, для этого достаточно что то сказать рядом со смартфоном не через рацию абонента и затем прослушать запись командой девять звездочка.",
+            "Если запись слышна это может в дальнейшем создавать случайные срабатывания от посторонних звуков. Для проверки ситуации можно воспользоваться оригинальными наушниками и подключив их проверить отключение микрофона.",
+            "Если отключение происходит это указывает на неправильную работу аудиокабеля. Если нет то это конструктивная особенность смартфона.",
+            "PTT плюс семь решетка, Включение управления вспышкой нажатием PTT, Отключение PTT плюс решетка.",
+            "PTT плюс восемь звездочка, Вход в раздел помощи к описанию команд с прослушиванием предложений с выбранным шагом, PTT плюс решетка выход из режима.",
+            "PTT плюс восемь решетка, Вход в основной раздел помощи с прослушиванием предложений с выбранным шагом, PTT плюс решетка выход из режима.",
+            "PTT плюс девять звездочка, Воспроизведение голосовых заметок.",
+            "PTT плюс девять решетка, Удаление голосовых заметок, по одной или все сразу.",
+            "Команды после набора номера и одиночного нажатия звездочки.",
+            "Один, звонок с первой сим карты.",
+            "Два, звонок с второй сим карты.",
+            "Три, назначение тестового номера для мониторинга сети.",
+            "Четыре, отправить на набранный номер надиктованную СМС, (при наличии интернета).",
+            "Пять, добавить набранный номер в книгу контактов, (при наличии интернета).",
+            "PTT плюс два раза звездочка, сразу звонок по последнему набранному номеру с сим карты с котороц звонили последний раз.",
+            "PTT плюс три раза звездочка, вход в режим назначения номеров быстрого набора, наберите номер а затем букву за которой он должен быть закреплен.",
+            "Это были основные, двадцать девять команд, назначение служебных команд, доступно в основном разделе помощи."
+        )
+    }
 
 
 
@@ -403,6 +456,10 @@ class MainRepositoryImpl(
     }
 
     override fun setMagneticField(value: Boolean) {
+        // Централизованное управление вспышкой через setFlashlight
+        if (flagFlashLight) {
+            setFlashlight(value)
+        }
         _magneticField.update { value }
     }
 
@@ -423,6 +480,36 @@ class MainRepositoryImpl(
 
     override fun setMagneticFieldFlag(value: Boolean) {
         _magneticFieldFlag.update { value }
+    }
+
+    override fun getFlashlightFlow(): Flow<Boolean> = flow {
+        if (_flashlight.value == null) {
+            try {
+                getFlashlight()
+            } catch (ex: Exception) {
+                ex.printStackTrace()
+            }
+        }
+        emitAll(_flashlight.filterNotNull())
+    }
+
+    override fun getFlashlight(): Boolean? {
+        return _flashlight.value
+    }
+
+    override fun setFlashlight(value: Boolean) {
+        // Оптимизация: включаем/выключаем вспышку только при изменении состояния
+        if (currentTorchState != value) {
+            try {
+                val cameraId = cameraManager.cameraIdList[0]
+                cameraManager.setTorchMode(cameraId, value)
+                currentTorchState = value
+            } catch (e: Exception) {
+                // Обработка ошибок (например, если камера недоступна)
+                e.printStackTrace()
+            }
+        }
+        _flashlight.update { value }
     }
 
     override fun getStatusDtmfFlow(): Flow<Boolean> = flow {
@@ -503,7 +590,7 @@ class MainRepositoryImpl(
         _timer.update { duration }
     }
 
-    // Основная логика работы таймера
+    // Основная логика работы таймера он запускается от изменения магнитного поля
 
     override fun getStartDtmfFlow(): Flow<Boolean> = flow {
         emitAll(_isDTMFStarted)
@@ -869,9 +956,8 @@ class MainRepositoryImpl(
     override fun clickKey(input: String, key: Char?) {
 
         if (key == ' ') {
-            val cameraId = cameraManager.cameraIdList[0]
             if (isTorchOn) {
-                cameraManager.setTorchMode(cameraId, false)
+                setFlashlight(false)
                 isTorchOn = false
                 if (isTorchOnIs == 555) {
                     if (input != "" && input.length == 2) {
@@ -952,56 +1038,84 @@ class MainRepositoryImpl(
             if ((key in 'A'..'D' && getCall() == null) && (!getFlagFrequencyLowHigt() && !flagDtmf)) {
                 playSoundJob.launch {
                     delay(200)
-                    val currentNumber = when (key) {
-                        'A' -> numberA
-                        'B' -> numberB
-                        'C' -> numberC
-                        'D' -> numberD
-                        else -> ""
+
+                    // --- ВЕТКА 1: РЕЖИМ ПРОГРАММИРОВАНИЯ (Активирован через ***) ---
+                    if (isProgrammingMode) {
+
+                        // 1. Проверяем, что введен номер для сохранения
+                        if (input.length in 3..11) {
+                            val numberToSave = input
+
+                            // 2. Проверяем, не закреплен ли этот номер уже за другой клавишей
+                            val currentNumberA = numberA
+                            val currentNumberB = numberB
+                            val currentNumberC = numberC
+                            val currentNumberD = numberD
+
+                            if (
+                                (key != 'A' && numberToSave == currentNumberA) ||
+                                (key != 'B' && numberToSave == currentNumberB) ||
+                                (key != 'C' && numberToSave == currentNumberC) ||
+                                (key != 'D' && numberToSave == currentNumberD)
+                            ) {
+                                speakText("Этот номер уже закреплен за другой клавишей")
+                                setInput("")
+                                isProgrammingMode = false // Выходим из режима, чтобы не застрять в нем
+                                return@launch
+                            }
+
+                            // 3. Проверка, не закреплен ли номер уже за ЭТОЙ клавишей
+                            val currentTargetNumber = when (key) {
+                                'A' -> numberA
+                                'B' -> numberB
+                                'C' -> numberC
+                                'D' -> numberD
+                                else -> ""
+                            }
+
+                            if (numberToSave == currentTargetNumber) {
+                                speakText("Этот номер ранее был закреплен за этой клавишей")
+                                setInput("")
+                                isProgrammingMode = false // Выходим из режима
+                            } else {
+                                // 4. Сохранение номера и озвучивание успеха
+
+                                when (key) {
+                                    'A' -> numberA = numberToSave
+                                    'B' -> numberB = numberToSave
+                                    'C' -> numberC = numberToSave
+                                    'D' -> numberD = numberToSave
+                                }
+
+                                val num = utils.numberToText(numberToSave)
+                                val callerName = utils.getContactNameByNumber(numberToSave, context)
+
+                                val confirmationMessage = if (callerName.isNullOrEmpty()) {
+                                    "Номер $num был закреплен за этой клавишей"
+                                } else {
+                                    "Номер абонента $callerName был закреплен за этой клавишей"
+                                }
+
+                                speakText(confirmationMessage)
+
+                                // 5. Выход из режима программирования
+                                setInput("") // Очищаем поле ввода после успешной операции
+                                isProgrammingMode = false
+                            }
+
+                        } else {
+                            speakText("Для закрепления, заново введите номер от 3 до 11 цифр, а затем нужную букву")
+                            setInput("")
+                        }
+
                     }
 
-                    if (input.length in 3..11) {
-                        if (currentNumber != input) {
-                            when (input) {
-                                numberA -> {
-                                    speakText("Этот номер уже закреплен за клавишей А")
-                                    setInput("")
-                                }
-                                numberB -> {
-                                    speakText("Этот номер уже закреплен за клавишей Б")
-                                    setInput("")
-                                }
-                                numberC -> {
-                                    speakText("Этот номер уже закреплен за клавишей С")
-                                    setInput("")
-                                }
-                                numberD -> {
-                                    speakText("Этот номер уже закреплен за клавишей Д")
-                                    setInput("")
-                                }
-                                else -> {
-                                    val num = utils.numberToText(input)
-                                    playSoundJob.launch {
-                                        val callerName = utils.getContactNameByNumber(input, context)
-                                        speakText(if (callerName.isNullOrEmpty()) {
-                                            "Номер $num был закреплен за этой клавишей"
-                                        } else {
-                                            "Номер абонента $callerName был закреплен за этой клавишей"
-                                        })
-                                    }
-                                    when (key) {
-                                        'A' -> numberA = input
-                                        'B' -> numberB = input
-                                        'C' -> numberC = input
-                                        'D' -> numberD = input
-                                    }
-                                    setInput("")
-                                }
-                            }
-                        } else {
-                            speakText("Этот номер ранее был закреплен за этой клавишей")
-                        }
-                    } else  {
+                    // --- ВЕТКА 2: ОБЫЧНЫЙ РЕЖИМ (ТОЛЬКО ВЫЗОВ) ---
+                    else {
+
+                        setInput("")
+
+                        // 1. Получаем закрепленный номер (если есть)
                         val number = when (key) {
                             'A' -> numberA
                             'B' -> numberB
@@ -1010,15 +1124,17 @@ class MainRepositoryImpl(
                             else -> ""
                         }
 
+                        // 2. Проверяем, есть ли номер для вызова
                         if (number.length in 3..11) {
-                            setInput(number)
+                            // Если номер закреплен, мы восстанавливаем его в input для звонка:
+                            setInput(number) // Это необходимо для DtmfService.callStart(context)
                             val num = utils.numberToText(number)
                             val callerName = utils.getContactNameByNumber(number, context)
 
                             val message = if (callerName.isNullOrEmpty()) {
                                 "Будет выполнен вызов абонента $num"
                             } else {
-                                "Номер абонента $callerName набран"
+                                "Номер абонента $callerName подготовлен к вызову"
                             }
 
                             speakText(message)
@@ -1030,13 +1146,13 @@ class MainRepositoryImpl(
                                 8000
                             }
 
-                            // if (getSim() == 5) setSim(0) сразу звонок с той сим с которой звонили последний раз
                             setSim(5) // Заставляем выбрать с какой сим карты выполнить вызов
                             delay(delayTime.toDuration(DurationUnit.MILLISECONDS)) // Задержка перед началом вызова
                             DtmfService.callStart(context)
-                            setInput1(getInput().toString())  // Закоментировать если надо сразу звонок с той сим с которой звонили последний раз
+                            setInput1(getInput().toString())
 
                         } else {
+                            // Если номер не закреплен
                             speakText("Клавиша свободна, вы можете закрепить за ней любой номер быстрого набора")
                         }
                     }
@@ -1048,19 +1164,28 @@ class MainRepositoryImpl(
                 isContactMode = false // Выход из режима листания контактов
 
                 // Функция, где обрабатываются одиночные/двойные клики:
-                if (flagDoobleClic in 0..1) {
+                if (flagDoobleClic in 0..2) {
                     playSoundJob.launch {
                         flagDoobleClic++
-                        delay(1500) // время для определения одинарного или двойного клика
+                        delay(1500) // время для определения кликов
+
+                        // ВАЖНО: Условие 'input.isEmpty()' должно быть общим для всех режимов.
                         when {
-                            // одинарный клик
-                            input.isEmpty() && flagDoobleClic == 1 -> {
-                                speakText("Наберите номер")
+                            // Тройной клик
+                            input.isEmpty() && flagDoobleClic == 3 -> {
+                                isProgrammingMode = true // Активируем режим
+                                speakText("Вы зашли в режим назначения номеров быстрого набора. Наберите номер и букву за которой он будет закреплен")
+                                // Таймер для выхода из режима, если ничего не происходит (20 секунд)
+                                delay(30000)
+                                if (isProgrammingMode) {
+                                    isProgrammingMode = false
+                                    speakText("Время назначения номера истекло, произведен выход из режима")
+                                }
                             }
-                            // двойной клик
+
+                            // Двойной клик
                             input.isEmpty() && flagDoobleClic == 2 -> {
                                 val secondInput = getInput2()
-                                // проверяем не только на null, но и на пустую строку
                                 if (!secondInput.isNullOrBlank()) {
                                     setInput(secondInput.toString())
                                     if (getSim() == 5) setSim(0) // звонок с последней использованной SIM
@@ -1069,7 +1194,14 @@ class MainRepositoryImpl(
                                     speakText("Вначале выполните звонок")
                                 }
                             }
+
+                            // Одинарный клик (это условие всегда должно быть последним в этой логике)
+                            input.isEmpty() && flagDoobleClic == 1 -> {
+                                speakText("Наберите номер")
+                            }
                         }
+
+                        // Сброс флага
                         flagDoobleClic = 0
                     }
                 }
@@ -1082,7 +1214,7 @@ class MainRepositoryImpl(
                     }
                 }
 
-                // Удаленная проверка пропущенного вызова по команде 0*
+                // Удаленная проверка входящий вызова по команде 0*
                 else if (input == "0" && getCall() == null) {
                     utils.lastMissed(context, true)
                 }
@@ -1105,10 +1237,26 @@ class MainRepositoryImpl(
                     utils.speakSimSignalLevels(context)
                 }
 
-                // Удаленная проверка последнего СМС по команде 4*
+                // Команда 4* (Прослушать SMS / Перейти к более новым)
                 else if (input == "4" && getCall() == null) {
-                    val smsText =  utils.getLastIncomingSms(context)
-                    speakText(smsText)
+                    if (smsNavigationIndex <= 0) {
+                        // Если индекс -1 (еще не начинали) или 0 (уже на самой новой)
+                        smsNavigationIndex = 0
+                        prefix = "Это самая новая смс. "
+                    } else {
+                        smsNavigationIndex-- // Перемещаемся к более новой
+                        prefix = ""
+                    }
+
+                    // Получаем и озвучиваем
+                    val (smsText, count) = utils.getIncomingSmsByIndex(context, smsNavigationIndex)
+                    totalSmsCount = count
+
+                    if (totalSmsCount == 0) {
+                        speakText("Сообщения отсутствуют.")
+                    } else {
+                        speakText(prefix + smsText)
+                    }
                     setInput("")
                 }
 
@@ -1167,14 +1315,14 @@ class MainRepositoryImpl(
                 // Пролиставание и прослушивание помощи
                 else if (input == "8" && getCall() == null) {
                     if (!isHelpMode) {
-                        // Загружаем предложения из файла index.html
-                        sentences = utils.loadSentencesFromHtml(context)
+                        // Загружаем предложения из локального списка
+                        sentences = getHelpSentences()
                         if (sentences.isEmpty()) {
-                            speakText("Файл помощи пуст или не найден.")
+                            speakText("Список помощи пуст.")
                             setInput("")
                         } else {
                             isHelpMode = true // Разрешение на пролистывание помоши
-                            currentSentenceIndex = 201
+                            currentSentenceIndex = -1  // Начинаем с начала списка команд
                             speakText("Вы перешли к описанию команд репитера. Для перемещения по описанию, по одному предложению, используйте 7 и 1. по 10 предложений, 8 и 2. по 100 предложений, 9 и 3.")
                             setInput("")
                         }
@@ -1728,6 +1876,8 @@ class MainRepositoryImpl(
                 flagDtmf = false // Отключение генератора двухтональных команд
                 textToSpeech.stop() // Остановка ТТС
                 isSpeaking = false
+                flagFlashLight = false // Сброс флага управления вспышкой по нажатию PTT
+                setFlashlight(false) // Отключаем вспышку если она включена
                 // setInput2("") // Стирание номера запомненного при двойном клике звездочкой
 
                 if (getCall() == null) {
@@ -1758,7 +1908,7 @@ class MainRepositoryImpl(
                         }
                     }
 
-                    // Удаленная проверка последнего принятого вызова по команде 0#
+                    // Удаленная проверка последнего пропущенный вызова по команде 0#
                     else if (input == "0" && getCall() == null) {
                         utils.lastMissed(context, false)
                     }
@@ -1819,9 +1969,32 @@ class MainRepositoryImpl(
                         checkCallStateSequence()
                     }
 
-                    // Команда удаления всех SMS по 4#
+                    // Команда 4# (Перейти к более старым)
                     else if (input == "4" && getCall() == null) {
-                        utils.deleteAllSms(context)
+                        if (smsNavigationIndex == -1) {
+                            smsNavigationIndex = 0
+                            prefix = ""
+                        } else {
+                            // Проверяем, не достигли ли мы конца
+                            if (smsNavigationIndex >= totalSmsCount - 1 && totalSmsCount > 0) {
+                                smsNavigationIndex = totalSmsCount - 1 // Фиксируем на последнем
+                                prefix = "Это самая старая смс. "
+                            } else {
+                                smsNavigationIndex++ // Листаем дальше
+                                prefix = ""
+                            }
+                        }
+
+                        // Получаем и озвучиваем
+                        val (smsText, count) = utils.getIncomingSmsByIndex(context, smsNavigationIndex)
+                        totalSmsCount = count
+
+                        if (totalSmsCount == 0) {
+                            speakText("Сообщения отсутствуют.")
+                        } else {
+                            speakText(prefix + smsText)
+                        }
+                        setInput("")
                     }
 
                     // Голосовой поиск абонента в телефонной книге по команде 5# с последующим удалением
@@ -1860,35 +2033,48 @@ class MainRepositoryImpl(
 
                     // Очистка номеров быстрого набора по команде 6*
                     else if (input == "6" && getCall() == null) {
-                        textToSpeech.setOnUtteranceProgressListener(null)
-                        numberA = ""
-                        numberB = ""
-                        numberC = ""
-                        numberD = ""
-                        lastDialedNumber = ""
-                        speakText("Все номера быстрого набора, были очищены")
+                        speakText("Команда не назначена")
+//                        textToSpeech.setOnUtteranceProgressListener(null)
+//                        numberA = ""
+//                        numberB = ""
+//                        numberC = ""
+//                        numberD = ""
+//                        lastDialedNumber = ""
+//                        speakText("Все номера быстрого набора, были очищены")
+                        setInput("")
+                    }
+
+                    // Включение разрешения управления вспышкой по нажатию PTT по команде 7*
+                    else if (input == "7" && getCall() == null) {
+                        flagFlashLight = true
+                        speakText("Управление вспышкой по нажатию PTT Включено, Отключение PTT + решетка, не работает")
                         setInput("")
                     }
 
                     // Пролиставание и прослушивание помощи
-                    else if (input == "8" && getCall() == null) {
-                        if (!isHelpMode) {
-                            // Загружаем предложения из файла index.html
-                            sentences = utils.loadSentencesFromHtml(context)
-                            if (sentences.isEmpty()) {
-                                speakText("Файл помощи пуст или не найден.")
-                                setInput("")
-                            } else {
-                                isHelpMode = true // Разрешение на пролистывание помоши
-                                currentSentenceIndex = -1
-                                speakText("Вы зашли в полный раздел описания функциональности репитера. Для перемещения по описанию, по одному предложению, используйте 7 и 1. по 10 предложений, 8 и 2. по 100 предложений, 9 и 3.")
-                                setInput("")
+                    else if (input.equals("8") && getCall() == null) {
+                        if (block) {
+                            if (!isHelpMode) {
+                                // Загружаем предложения из локального списка
+                                sentences = getHelpSentences();
+                                if (sentences.isEmpty()) {
+                                    speakText("Список помощи пуст.");
+                                    setInput("");
+                                } else {
+                                    isHelpMode = true; // Разрешение на пролистывание помоши
+                                    currentSentenceIndex = 0;  // Начинаем с начала списка команд
+                                    speakText("Вы зашли в полный раздел описания функциональности репитера. Для перемещения по описанию, по одному предложению, используйте 7 и 1. по 10 предложений, 8 и 2. по 100 предложений, 9 и 3.");
+                                    setInput("");
+                                }
                             }
+                        } else {
+                            speakText("Команда заблокирована");
+                            setInput("");
                         }
                     }
 
-                    // Удаление голосовой заметки 99999#
-                    else if (input == "99999" && getCall() == null) {
+                    // Удаление голосовой заметки 9#
+                    else if (input == "9" && getCall() == null) {
                         utils.deleteRecordedFile(isTorchOnIs, subscribers)
                         setInput("")
 
@@ -2005,9 +2191,8 @@ class MainRepositoryImpl(
                     if (!isContactMode && !isHelpMode) { // Блокировка печати в режимах пролистывания контактов и помощи
                         setInput(input + key)}
                 } else {
-                    val cameraId = cameraManager.cameraIdList[0]
                     if (!isTorchOn) {
-                        cameraManager.setTorchMode(cameraId, true)
+                        setFlashlight(true)
                         isTorchOn = true
 
 

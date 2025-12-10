@@ -83,8 +83,8 @@ class MainScreen : Screen {
                                 .height(54.dp),
                             colors = CardDefaults.cardColors(
                                 containerColor = when {
-                                    screenState.isRecording -> Color(0xFFE72929) // Красный, если идет запись
-                                    screenState.magneticField -> Color(0xFF1E88E5) // Синий, если магнитное поле = true (0xFF1E88E5 - глубокий синий)
+                                    screenState.isRecording -> Color(0xFFE72929) // Красный, если идет запись голосовой заметки.
+                                    screenState.magneticField -> Color(0xFF1E88E5) // Синий, если есть магнитное поле = true (0xFF1E88E5 - глубокий синий)
                                     else -> Color(0xFFE0E0E0) // Светло-серый по умолчанию
                                 }
                             )

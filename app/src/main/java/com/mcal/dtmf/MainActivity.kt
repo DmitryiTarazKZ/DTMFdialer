@@ -16,6 +16,7 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
+import android.provider.Telephony
 import android.telecom.TelecomManager
 import android.util.Log
 import android.view.KeyEvent
@@ -35,11 +36,13 @@ import com.mcal.dtmf.data.repositories.main.MainRepository
 import com.mcal.dtmf.receiver.BootReceiver
 import com.mcal.dtmf.ui.main.MainScreen
 import com.mcal.dtmf.ui.theme.VoyagerDialogTheme
+import com.mcal.dtmf.utils.Utils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
+import kotlin.math.atan2
 
 class MainActivity : ComponentActivity() {
     private val mainRepository: MainRepository by inject()
@@ -50,26 +53,52 @@ class MainActivity : ComponentActivity() {
     private lateinit var sensorManager: SensorManager
     private var magneticFieldSensor: Sensor? = null
 
-    private val shangeThreshold= 5.0f
+    private val shangeThreshold= 5.0f  // порог для максимальной чувствительности
     private var lastMagneticFieldY = 0.0f
     private var isDebouncing = false
     private val debounceDelay = 100L
     private val scope = CoroutineScope(Dispatchers.Default)
 
+
     private val sensorListener = object : SensorEventListener {
         override fun onSensorChanged(event: SensorEvent?) {
-            if (isDebouncing) return  // Защита от дребезга датчика (предотвращение двойного запуска DTMF)
+            // 1. Защита от Debouncing
+            if (isDebouncing) return
 
             if (event?.sensor?.type == Sensor.TYPE_MAGNETIC_FIELD) {
-                val magneticFieldY = event.values[1]
+                val magneticFieldX = event.values[0]
+                val magneticFieldY = event.values[1] // Используется и для триггера
 
-                // Проверка порога изменения (EDGE TRIGGER)
+                // 1.1. --- РАСЧЕТ АЗИМУТА (2D, БЕЗ АКСЕЛЕРОМЕТРА) ---
+                // atan2(y, x) возвращает угол в радианах в диапазоне [-π, π].
+                // Ось X (event.values[0]) обычно направлена вправо, ось Y (event.values[1]) — вверх.
+                val azimuthRadians = atan2(magneticFieldY.toDouble(), magneticFieldX.toDouble())
+
+                // Конвертируем радианы в градусы
+                var azimuthDegrees = Math.toDegrees(azimuthRadians).toFloat()
+
+                // Нормализуем, чтобы Север был 0° и диапазон был 0° - 360°
+                // В 2D-системе atan2(y, x) дает 0° на +X.
+                // Компас обычно имеет 0° на +Y (Север).
+                // Для компасного представления нужно инвертировать и сдвинуть, но для отслеживания *сдвига* // достаточно нормализовать:
+                if (azimuthDegrees < 0) {
+                    azimuthDegrees += 360
+                }
+
+                // ⚠️ ВАЖНО:
+                // Реальный Север в этой 2D-схеме находится под углом 90 градусов.
+                // Но для вашей цели (отслеживание СМЕЩЕНИЯ угла) эта нормализация подходит.
+
+                // Log.i("Контрольный лог", "АЗИМУТ (2D Сдвиг): ${azimuthDegrees.toInt()}°")
+                //Log.d("Контрольный лог", "ЗНАЧЕНИЕ Y: $magneticFieldY")
+
+
+                // 2. --- EDGE TRIGGER (БЕЗ ИЗМЕНЕНИЙ) ---
                 if (Math.abs(magneticFieldY - lastMagneticFieldY) >= shangeThreshold) {
 
                     if (mainRepository.getTimer() == 30000L) {
-                        // Используем Debounce, который вы уже настроили
                         isDebouncing = true
-                        // Log.e("Контрольный лог", "++++++++ (ФАКТ ИЗМЕНЕНИЯ ПОЛЯ)")
+
                         if (mainRepository.getMagneticFieldFlag() == true) {
                             mainRepository.setStartDtmf(!mainRepository.getStartDtmf())
                         }
@@ -141,6 +170,31 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // Ресивер для автоматического озвучивания входящих SMS
+
+    private val smsReceiver: BroadcastReceiver = object : BroadcastReceiver() {
+
+        override fun onReceive(context: Context, intent: Intent) {
+
+            if (intent.action == Telephony.Sms.Intents.SMS_RECEIVED_ACTION) {
+
+                val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
+
+                if (messages != null && messages.isNotEmpty()) {
+                    val sender = messages[0].displayOriginatingAddress
+                    val fullMessageBody = StringBuilder()
+                    for (sms in messages) {
+                        fullMessageBody.append(sms.displayMessageBody)
+                    }
+                    val rawText = fullMessageBody.toString()
+                    mainRepository.speakText("Внимание у вас входящее сообщение от $sender: $rawText")
+                } else {
+                    mainRepository.speakText("Пустое входящее сообщение")
+                }
+            }
+        }
+    }
+
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
         when (keyCode) {
             KeyEvent.KEYCODE_HEADSETHOOK -> {
@@ -152,7 +206,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        super.onKeyUp(keyCode, event)
+        super.onKeyDown(keyCode, event)
         when (keyCode) {
             KeyEvent.KEYCODE_HEADSETHOOK -> {
                 mainRepository.setMicKeyClick(KeyEvent.KEYCODE_HEADSETHOOK)
@@ -199,8 +253,9 @@ class MainActivity : ComponentActivity() {
             addAction(Intent.ACTION_SCREEN_ON)
         }
         registerReceiver(screenStateReceiver, screenStateFilter)
+        val smsFilter = IntentFilter(Telephony.Sms.Intents.SMS_RECEIVED_ACTION)
+        registerReceiver(smsReceiver, smsFilter)
     }
-
     private fun offerReplacingDefaultDialer() {
         if (getSystemService(TelecomManager::class.java).defaultDialerPackage != packageName) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -248,6 +303,14 @@ class MainActivity : ComponentActivity() {
             ) == PackageManager.PERMISSION_DENIED
         ) {
             permissionsToRequest.add(Manifest.permission.SEND_SMS)
+        }
+
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.RECEIVE_SMS
+            ) == PackageManager.PERMISSION_DENIED
+        ) {
+            permissionsToRequest.add(Manifest.permission.RECEIVE_SMS)
         }
 
         if (ContextCompat.checkSelfPermission(
@@ -377,12 +440,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+
+        // 1. Повторная проверка статуса SMS-приложения
+      // приводит к зацикливанию диалога смс по умолчанию  checkAndRequestDefaultSmsApp() // <--- Добавить здесь!
+
         // 3. Регистрация слушателя датчика при возобновлении
         magneticFieldSensor?.let {
             sensorManager.registerListener(
                 sensorListener,
                 it,
-                SensorManager.SENSOR_DELAY_UI // Оптимальная задержка
+                SensorManager.SENSOR_DELAY_GAME // умеренная частота обновления для максимальной чувствительности
             )
         }
         isAppInForeground = true
@@ -393,6 +460,7 @@ class MainActivity : ComponentActivity() {
         unregisterReceiver(headphoneReceiver)
         unregisterReceiver(powerReceiver)
         unregisterReceiver(screenStateReceiver)
+        unregisterReceiver(smsReceiver)
         mainRepository.stopDtmf()
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }

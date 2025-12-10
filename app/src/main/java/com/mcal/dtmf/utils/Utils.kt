@@ -51,6 +51,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.Timer
 import java.util.TimerTask
+import java.util.concurrent.TimeUnit
 import kotlin.math.PI
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -67,7 +68,9 @@ class Utils(
     private var availableMB = 0L
     private var audioRecord: AudioRecord? = null
     private var recordedFilePath: String? = null
-    private val recordedFiles = mutableListOf<String>()
+    private val recordedFiles by lazy {
+        loadRecordedFiles().toMutableList()
+    }
     private var isRecordingLocal = false
 
     companion object {
@@ -270,6 +273,21 @@ class Utils(
             else -> "$minutes минут"
         }
         return "$hoursString $minutesString"
+    }
+
+    private fun loadRecordedFiles(): List<String> {
+        val storageDir = context.getExternalFilesDir(null) ?: return emptyList()
+
+        // Находим все файлы, соответствующие вашему шаблону имени
+        // Шаблон: deletesec:x_selective:x_registers:x_adresat:x_time:x.pcm
+        // Мы можем использовать регулярное выражение или просто проверить расширение и структуру.
+
+        // Простая проверка по расширению и наличию метки 'time:'
+        return storageDir.listFiles()
+            ?.filter { it.isFile && it.name.endsWith(".pcm") && it.name.contains("_time:") }
+            ?.map { it.absolutePath }
+            ?.toMutableList()
+            ?: emptyList()
     }
 
     // Последний вызов: пропущенный (0*) или входящий (0#)
@@ -808,17 +826,76 @@ class Utils(
         return false // Возвращаем false, если контакт не найден или не удален
     }
 
-    // Функция для получения последнего входящего СМС по команде 4*
-    fun getLastIncomingSms(context: Context): String {
+    // Перемещение по списку смс
+    fun getIncomingSmsByIndex(context: Context, index: Int): Pair<String, Int> { // Pair<Сообщение, ОбщееКоличество>
         val smsUri = Uri.parse("content://sms/inbox")
-        val cursor = context.contentResolver.query(smsUri, null, null, null, "date DESC")
+        val projection = arrayOf("address", "body", "date")
+
+        val cursor = context.contentResolver.query(
+            smsUri,
+            projection,
+            null,
+            null,
+            "date DESC" // Сортировка: самое новое сообщение первым
+        )
+
         cursor?.use {
-            if (it.moveToFirst()) {
+            val totalCount = it.count
+
+            if (totalCount == 0) {
+                return Pair("Сообщения отсутствуют.", 0)
+            }
+
+            // Проверка границ
+            if (index < 0 || index >= totalCount) {
+                return Pair("", totalCount)
+            }
+
+            // Перемещаемся к нужному сообщению
+            if (it.moveToPosition(index)) {
+
+                // --- 1. Извлечение и идентификация отправителя ---
+                val senderAddress = it.getString(it.getColumnIndexOrThrow("address"))
+                val contactName = getContactNameByNumber(senderAddress, context)
+                val senderIdentifier = contactName ?: senderAddress
+
+                // --- 2. Извлечение и расчет времени ---
+                val messageDateMs = it.getLong(it.getColumnIndexOrThrow("date"))
+                val currentTimeMs = System.currentTimeMillis()
+                val delayMs = currentTimeMs - messageDateMs
+
+                val delayString = when {
+                    delayMs < TimeUnit.MINUTES.toMillis(1) -> "только что"
+                    delayMs < TimeUnit.HOURS.toMillis(1) -> {
+                        val minutes = TimeUnit.MILLISECONDS.toMinutes(delayMs)
+                        "$minutes мин. назад"
+                    }
+                    delayMs < TimeUnit.DAYS.toMillis(1) -> {
+                        val hours = TimeUnit.MILLISECONDS.toHours(delayMs)
+                        "$hours час. назад"
+                    }
+                    else -> {
+                        val sdf = SimpleDateFormat("dd.MM.yyyy в HH:mm", Locale.getDefault())
+                        sdf.format(Date(messageDateMs))
+                    }
+                }
+                // --- Конец логики времени ---
+
+                // 3. Извлекаем и преобразуем тело сообщения
                 val messageBody = it.getString(it.getColumnIndexOrThrow("body"))
-                return convertToRussianText(messageBody)
+                val convertedText = convertToRussianText(messageBody)
+
+                // 4. Формируем итоговое сообщение
+                val messageIndex = index + 1 // Человеческое нумерование
+
+                // Здесь слово "получено" используется один раз для всех случаев
+                val message = "Сообщение номер $messageIndex из $totalCount от $senderIdentifier, получено $delayString. Содержание: $convertedText"
+
+                return Pair(message, totalCount)
             }
         }
-        return "сообщения отсутствуют"
+
+        return Pair("Ошибка при чтении сообщения.", 0)
     }
 
     // Удаление всех SMS по команде 4# (требуется быть приложением по умолчанию для SMS на Android 4.4+) ФУНКЦИЯ НЕ РАБОТАЕТ!!!
@@ -916,7 +993,7 @@ class Utils(
     }
 
     // Функция для преобразования текста СМС в нормальный русский текст если написано английскими буквами
-    private fun convertToRussianText(input: String): String {
+    fun convertToRussianText(input: String): String {
         // Удаляем ссылки из текста
         val cleanedInput = input.replace(Regex("https?://\\S+"), "")
 
@@ -946,6 +1023,10 @@ class Utils(
             .replace("%", "процентов")
             .replace("тг.", "тенге")
             .replace("Tг.", "тенге")
+            .replace("silnyi", "сильный")
+            .replace("Shymkent", "Шымкент")
+            .replace("Silnaya", "Сильная")
+            .replace("metel", "Метель")
 
         val transliterationMap = mapOf(
             'a' to 'а', 'b' to 'б', 'c' to 'ц', 'd' to 'д', 'e' to 'е', 'f' to 'ф', 'g' to 'г', 'h' to 'х', 'i' to 'и',
