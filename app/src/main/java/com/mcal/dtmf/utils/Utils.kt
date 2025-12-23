@@ -868,11 +868,29 @@ class Utils(
                     delayMs < TimeUnit.MINUTES.toMillis(1) -> "только что"
                     delayMs < TimeUnit.HOURS.toMillis(1) -> {
                         val minutes = TimeUnit.MILLISECONDS.toMinutes(delayMs)
-                        "$minutes мин. назад"
+
+                        // Логика склонения для МИНУТ
+                        val num = minutes % 100
+                        val pluralMin = when {
+                            num in 11L..19L -> "минут"
+                            num % 10 == 1L -> "минуту"
+                            num % 10 in 2L..4L -> "минуты"
+                            else -> "минут"
+                        }
+                        "$minutes $pluralMin назад"
                     }
                     delayMs < TimeUnit.DAYS.toMillis(1) -> {
                         val hours = TimeUnit.MILLISECONDS.toHours(delayMs)
-                        "$hours час. назад"
+
+                        // Логика склонения для ЧАСОВ
+                        val num = hours % 100
+                        val pluralHour = when {
+                            num in 11L..19L -> "часов"
+                            num % 10 == 1L -> "час"
+                            num % 10 in 2L..4L -> "часа"
+                            else -> "часов"
+                        }
+                        "$hours $pluralHour назад"
                     }
                     else -> {
                         val sdf = SimpleDateFormat("dd.MM.yyyy в HH:mm", Locale.getDefault())

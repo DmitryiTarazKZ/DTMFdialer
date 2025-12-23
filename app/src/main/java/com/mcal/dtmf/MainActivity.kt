@@ -48,74 +48,6 @@ class MainActivity : ComponentActivity() {
     private val mainRepository: MainRepository by inject()
     private val permissionCode = 100
     private var wakeLock: PowerManager.WakeLock? = null
-    private var isAppInForeground = false
-
-    private lateinit var sensorManager: SensorManager
-    private var magneticFieldSensor: Sensor? = null
-
-    private val shangeThreshold= 5.0f  // порог для максимальной чувствительности
-    private var lastMagneticFieldY = 0.0f
-    private var isDebouncing = false
-    private val debounceDelay = 100L
-    private val scope = CoroutineScope(Dispatchers.Default)
-
-
-    private val sensorListener = object : SensorEventListener {
-        override fun onSensorChanged(event: SensorEvent?) {
-            // 1. Защита от Debouncing
-            if (isDebouncing) return
-
-            if (event?.sensor?.type == Sensor.TYPE_MAGNETIC_FIELD) {
-                val magneticFieldX = event.values[0]
-                val magneticFieldY = event.values[1] // Используется и для триггера
-
-                // 1.1. --- РАСЧЕТ АЗИМУТА (2D, БЕЗ АКСЕЛЕРОМЕТРА) ---
-                // atan2(y, x) возвращает угол в радианах в диапазоне [-π, π].
-                // Ось X (event.values[0]) обычно направлена вправо, ось Y (event.values[1]) — вверх.
-                val azimuthRadians = atan2(magneticFieldY.toDouble(), magneticFieldX.toDouble())
-
-                // Конвертируем радианы в градусы
-                var azimuthDegrees = Math.toDegrees(azimuthRadians).toFloat()
-
-                // Нормализуем, чтобы Север был 0° и диапазон был 0° - 360°
-                // В 2D-системе atan2(y, x) дает 0° на +X.
-                // Компас обычно имеет 0° на +Y (Север).
-                // Для компасного представления нужно инвертировать и сдвинуть, но для отслеживания *сдвига* // достаточно нормализовать:
-                if (azimuthDegrees < 0) {
-                    azimuthDegrees += 360
-                }
-
-                // ⚠️ ВАЖНО:
-                // Реальный Север в этой 2D-схеме находится под углом 90 градусов.
-                // Но для вашей цели (отслеживание СМЕЩЕНИЯ угла) эта нормализация подходит.
-
-                // Log.i("Контрольный лог", "АЗИМУТ (2D Сдвиг): ${azimuthDegrees.toInt()}°")
-                //Log.d("Контрольный лог", "ЗНАЧЕНИЕ Y: $magneticFieldY")
-
-
-                // 2. --- EDGE TRIGGER (БЕЗ ИЗМЕНЕНИЙ) ---
-                if (Math.abs(magneticFieldY - lastMagneticFieldY) >= shangeThreshold) {
-
-                    if (mainRepository.getTimer() == 30000L) {
-                        isDebouncing = true
-
-                        if (mainRepository.getMagneticFieldFlag() == true) {
-                            mainRepository.setStartDtmf(!mainRepository.getStartDtmf())
-                        }
-                        scope.launch {
-                            delay(debounceDelay)
-                            isDebouncing = false
-                        }
-                    }
-                    lastMagneticFieldY = magneticFieldY
-                }
-            }
-        }
-
-        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
-            // Не требуется
-        }
-    }
 
     private val powerReceiver: BroadcastReceiver = object : BootReceiver() {
         override fun onReceive(context: Context, intent: Intent?) {
@@ -134,10 +66,10 @@ class MainActivity : ComponentActivity() {
             if (intent?.action == Intent.ACTION_HEADSET_PLUG) {
                 val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
                 audioManager.ringerMode = if (intent.getIntExtra("state", 0) == 1) {
-                mainRepository.speakText("Соеденение смартфона и радиостанции произведено успешно")
+                mainRepository.speakText("Соеденение смартфона и радиостанции произведено успешно, убедитесь что в параметрах разработчика включено: Не отключать экран во время зарядки")
                 AudioManager.RINGER_MODE_SILENT
                 } else {
-                mainRepository.speakText("Соедените смартфон и радиостанцию")
+                mainRepository.speakText("Соедените смартфон и радиостанцию, в параметрах разработчика включите: Не отключать экран во время зарядки")
                 AudioManager.RINGER_MODE_NORMAL }
             }
         }
@@ -147,24 +79,24 @@ class MainActivity : ComponentActivity() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
                 Intent.ACTION_SCREEN_OFF -> {
-                    val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-                    wakeLock = powerManager.newWakeLock(PowerManager.FULL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP, "MyApp::MyWakelockTag")
+                    mainRepository.speakText("Экран отключен")
 
-                    try {
-                        wakeLock?.acquire(30 * 1000L) // Удерживаем WakeLock на 30 секунд
-                    } catch (e: Exception) {
-                        mainRepository.speakText("Ошибка при захвате WakeLock")
+                    // Запускаем пробуждение через полсекунды
+                    CoroutineScope(Dispatchers.Main).launch {
+                        delay(500)
+                        val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+                        val wl = pm.newWakeLock(
+                            PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
+                                    PowerManager.ACQUIRE_CAUSES_WAKEUP or
+                                    PowerManager.ON_AFTER_RELEASE,
+                            "DTMFApp::RepeaterWakeup"
+                        )
+                        wl.acquire(1000) // Включаем
+                        if (wl.isHeld) wl.release()
                     }
                 }
                 Intent.ACTION_SCREEN_ON -> {
-                  if (!isAppInForeground) {  mainRepository.speakText("Приложение свернуто но еще работает. Откройте приложение его должно быть видно") }
-                    try {
-                        wakeLock?.release()
-                    } catch (e: Exception) {
-                        mainRepository.speakText("Ошибка при освобождении WakeLock")
-                    } finally {
-                        wakeLock = null // Обнуляем ссылку на WakeLock
-                    }
+                    mainRepository.speakText("Экран включен")
                 }
             }
         }
@@ -218,10 +150,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         checkPermissions()
         offerReplacingDefaultDialer()
-        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
-        magneticFieldSensor = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
+
         setContent {
             VoyagerDialogTheme {
                 MaterialTheme {
@@ -432,27 +364,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onPause() {
         super.onPause()
-        isAppInForeground = false
-//        if (mainRepository.getCallState() == 7) {
-//            mainRepository.speakText("Нельзя отключать экран и сворачивать приложение... Приложение должно быть видно, иначе система для освобождения памяти может убить процесс")
-//        }
     }
 
     override fun onResume() {
         super.onResume()
-
-        // 1. Повторная проверка статуса SMS-приложения
-      // приводит к зацикливанию диалога смс по умолчанию  checkAndRequestDefaultSmsApp() // <--- Добавить здесь!
-
-        // 3. Регистрация слушателя датчика при возобновлении
-        magneticFieldSensor?.let {
-            sensorManager.registerListener(
-                sensorListener,
-                it,
-                SensorManager.SENSOR_DELAY_GAME // умеренная частота обновления для максимальной чувствительности
-            )
-        }
-        isAppInForeground = true
+        // Принудительно подтверждаем, что экран не должен гаснуть
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
     override fun onDestroy() {

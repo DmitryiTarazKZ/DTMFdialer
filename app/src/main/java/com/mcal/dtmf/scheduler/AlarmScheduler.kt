@@ -26,7 +26,7 @@ class AlarmScheduler(
             timeInMillis = System.currentTimeMillis()
             set(Calendar.HOUR_OF_DAY, hours)
             set(Calendar.MINUTE, minutes)
-            set(Calendar.SECOND, 0)
+            set(Calendar.SECOND, get(Calendar.SECOND))
             set(Calendar.MILLISECOND, 0)
 
             if (before(Calendar.getInstance())) {

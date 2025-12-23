@@ -46,15 +46,19 @@ class MainScreen : Screen {
                                     val volumePercent = (screenState.volumeLevelCtcss * 1000).toInt()
                                     "CTCSS ${screenState.frequencyCtcss} Гц ${volumePercent}%"
                                 }
-                                screenState.amplitudeCheck -> if (screenState.magneticFieldFlag) { "SUPER TEL" + " <${screenState.callState}> <${screenState.timer/1000}> <${screenState.micClickKeyCode}>" } else {
+                                screenState.amplitudeCheck -> if (screenState.magneticFieldFlag) {
+                                    "SUPER TEL" + " <${screenState.callState}> <${screenState.timer/1000}> <${screenState.micClickKeyCode}>"
+                                } else {
                                     "SUPER TEL" + " <${screenState.callState}> <НЦ> <${screenState.micClickKeyCode}>"
                                 }
                                 else -> "Блокировка MIC"
                             },
                             color = when {
+                                // 1. Если amplitudeCheck false, выводится "Блокировка MIC" -> ставим красный цвет первым приоритетом
+                                !screenState.amplitudeCheck -> Color.Red
+                                // 2. Остальные условия по порядку
                                 screenState.statusDtmf -> Color.Blue
                                 screenState.isPlaying -> Color.Red
-                                !screenState.amplitudeCheck -> Color.Red
                                 else -> Color.Black
                             }
                         )

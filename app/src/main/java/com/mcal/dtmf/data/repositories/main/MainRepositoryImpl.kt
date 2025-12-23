@@ -18,12 +18,12 @@ import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.telecom.Call
-import android.util.Log
 import com.mcal.dtmf.recognizer.DataBlock
 import com.mcal.dtmf.recognizer.Recognizer
 import com.mcal.dtmf.recognizer.Spectrum
 import com.mcal.dtmf.recognizer.StatelessRecognizer
 import com.mcal.dtmf.scheduler.AlarmScheduler
+import com.mcal.dtmf.service.AlarmSoundService
 import com.mcal.dtmf.service.DtmfService
 import com.mcal.dtmf.utils.Utils
 import com.mcal.dtmf.utils.Utils.Companion.batteryStatus
@@ -106,13 +106,38 @@ class MainRepositoryImpl(
     private var isTorchOnIs = 5 // Задано 5 чтобы исключить случайное срабатывание (Внимание открытый канал...)
     private var isSpeaking = false
     private var currentTorchState: Boolean? = null  // Текущее состояние вспышки для оптимизации (централизованное управление)
-    private var lastDialedNumber: String = ""
     private var monitorNumber: String = "87057895564" // Номер по умолчанию для тестовых звонков для проверки сети
     private var voxActivation = 500L
-    private var numberA = ""
-    private var numberB = ""
-    private var numberC = ""
-    private var numberD = ""
+    private var isBeaconActiveManually = false // Флаг работы маяка
+
+    // Ключи для SharedPreferences.
+    private val KEY_A = "QUICK_DIAL_A"
+    private val KEY_B = "QUICK_DIAL_B"
+    private val KEY_C = "QUICK_DIAL_C"
+    private val KEY_D = "QUICK_DIAL_D"
+
+    /**
+     * Загружает номер быстрого набора (строка) из SharedPreferences.
+     */
+    private fun loadQuickDialNumber(context: Context, key: String): String {
+        // Используем SharedPreferences с именем "QUICK_DIAL_PREFS"
+        val prefs = context.getSharedPreferences("QUICK_DIAL_PREFS", Context.MODE_PRIVATE)
+        return prefs.getString(key, "") ?: "" // Возвращает сохраненный строковый номер или ""
+    }
+
+    /**
+     * Сохраняет номер быстрого набора (строка) в SharedPreferences.
+     */
+    private fun saveQuickDialNumber(context: Context, key: String, number: String) {
+        val prefs = context.getSharedPreferences("QUICK_DIAL_PREFS", Context.MODE_PRIVATE)
+        prefs.edit().putString(key, number).apply()
+    }
+
+    private var numberA: String = ""
+    private var numberB: String = ""
+    private var numberC: String = ""
+    private var numberD: String = ""
+
     private var isTorchOn = false
     private var flagVox = false
     private var flagAmplitude = false
@@ -248,6 +273,13 @@ class MainRepositoryImpl(
                 0
             )
         }
+
+        // --- ДОБАВЛЕНО: ЗАГРУЗКА СОХРАНЕННЫХ НОМЕРОВ БЫСТРОГО НАБОРА ---
+        numberA = loadQuickDialNumber(context, KEY_A)
+        numberB = loadQuickDialNumber(context, KEY_B)
+        numberC = loadQuickDialNumber(context, KEY_C)
+        numberD = loadQuickDialNumber(context, KEY_D)
+        // -----------------------------------------------------------------
     }
 
     private fun setVolumeTts(level: Int) {
@@ -936,7 +968,7 @@ class MainRepositoryImpl(
         return sum / readSize
     }
 
-    //Получение данных с блока распознавания
+    //Получение данных с блока распознавания Фурье
     override suspend fun recognize() {
         coroutineScope {
             while (isActive) {
@@ -1036,8 +1068,10 @@ class MainRepositoryImpl(
 
             // Обработка нажатий клавиш быстрого набора
             if ((key in 'A'..'D' && getCall() == null) && (!getFlagFrequencyLowHigt() && !flagDtmf)) {
+
                 playSoundJob.launch {
-                    delay(200)
+
+                    delay(300) // Увеличенная задержка для стабилизации isProgrammingMode
 
                     // --- ВЕТКА 1: РЕЖИМ ПРОГРАММИРОВАНИЯ (Активирован через ***) ---
                     if (isProgrammingMode) {
@@ -1053,14 +1087,15 @@ class MainRepositoryImpl(
                             val currentNumberD = numberD
 
                             if (
-                                (key != 'A' && numberToSave == currentNumberA) ||
-                                (key != 'B' && numberToSave == currentNumberB) ||
-                                (key != 'C' && numberToSave == currentNumberC) ||
-                                (key != 'D' && numberToSave == currentNumberD)
+                                (key != 'A' && numberToSave == currentNumberA && currentNumberA.isNotEmpty()) ||
+                                (key != 'B' && numberToSave == currentNumberB && currentNumberB.isNotEmpty()) ||
+                                (key != 'C' && numberToSave == currentNumberC && currentNumberC.isNotEmpty()) ||
+                                (key != 'D' && numberToSave == currentNumberD && currentNumberD.isNotEmpty())
                             ) {
+                                flagDoobleClic = 0 // прекращаем ожидание выполнения кода тройного клика
                                 speakText("Этот номер уже закреплен за другой клавишей")
                                 setInput("")
-                                isProgrammingMode = false // Выходим из режима, чтобы не застрять в нем
+                                isProgrammingMode = false
                                 return@launch
                             }
 
@@ -1074,22 +1109,35 @@ class MainRepositoryImpl(
                             }
 
                             if (numberToSave == currentTargetNumber) {
+                                flagDoobleClic = 0 // прекращаем ожидание выполнения кода тройного клика
                                 speakText("Этот номер ранее был закреплен за этой клавишей")
                                 setInput("")
-                                isProgrammingMode = false // Выходим из режима
+                                isProgrammingMode = false
                             } else {
                                 // 4. Сохранение номера и озвучивание успеха
 
                                 when (key) {
-                                    'A' -> numberA = numberToSave
-                                    'B' -> numberB = numberToSave
-                                    'C' -> numberC = numberToSave
-                                    'D' -> numberD = numberToSave
+                                    'A' -> {
+                                        numberA = numberToSave
+                                        saveQuickDialNumber(context, KEY_A, numberToSave)
+                                    }
+                                    'B' -> {
+                                        numberB = numberToSave
+                                        saveQuickDialNumber(context, KEY_B, numberToSave)
+                                    }
+                                    'C' -> {
+                                        numberC = numberToSave
+                                        saveQuickDialNumber(context, KEY_C, numberToSave)
+                                    }
+                                    'D' -> {
+                                        numberD = numberToSave
+                                        saveQuickDialNumber(context, KEY_D, numberToSave)
+                                    }
                                 }
 
                                 val num = utils.numberToText(numberToSave)
                                 val callerName = utils.getContactNameByNumber(numberToSave, context)
-
+                                flagDoobleClic = 0 // прекращаем ожидание выполнения кода тройного клика
                                 val confirmationMessage = if (callerName.isNullOrEmpty()) {
                                     "Номер $num был закреплен за этой клавишей"
                                 } else {
@@ -1099,13 +1147,14 @@ class MainRepositoryImpl(
                                 speakText(confirmationMessage)
 
                                 // 5. Выход из режима программирования
-                                setInput("") // Очищаем поле ввода после успешной операции
+                                setInput("")
                                 isProgrammingMode = false
                             }
 
                         } else {
                             speakText("Для закрепления, заново введите номер от 3 до 11 цифр, а затем нужную букву")
                             setInput("")
+                            isProgrammingMode = false // Выходим из режима при неудачном вводе
                         }
 
                     }
@@ -1127,7 +1176,7 @@ class MainRepositoryImpl(
                         // 2. Проверяем, есть ли номер для вызова
                         if (number.length in 3..11) {
                             // Если номер закреплен, мы восстанавливаем его в input для звонка:
-                            setInput(number) // Это необходимо для DtmfService.callStart(context)
+                            setInput(number)
                             val num = utils.numberToText(number)
                             val callerName = utils.getContactNameByNumber(number, context)
 
@@ -1140,14 +1189,14 @@ class MainRepositoryImpl(
                             speakText(message)
 
                             // Установка времени задержки в зависимости от сообщения
-                            val delayTime = if (message == "Будет выполнен вызов абонента $num") {
+                            val delayTime = if (callerName.isNullOrEmpty()) {
                                 12000
                             } else {
                                 8000
                             }
 
-                            setSim(5) // Заставляем выбрать с какой сим карты выполнить вызов
-                            delay(delayTime.toDuration(DurationUnit.MILLISECONDS)) // Задержка перед началом вызова
+                            setSim(5)
+                            delay(delayTime.toDuration(DurationUnit.MILLISECONDS))
                             DtmfService.callStart(context)
                             setInput1(getInput().toString())
 
@@ -1161,26 +1210,21 @@ class MainRepositoryImpl(
 
             else if (key == '*') {
 
+                isProgrammingMode = false // Выход из режима програмирования номеров быстрого набора
                 isContactMode = false // Выход из режима листания контактов
 
                 // Функция, где обрабатываются одиночные/двойные клики:
                 if (flagDoobleClic in 0..2) {
+
                     playSoundJob.launch {
                         flagDoobleClic++
-                        delay(1500) // время для определения кликов
+                        delay(1500) // время отведенное на определение сколько было выполнено кликов
 
-                        // ВАЖНО: Условие 'input.isEmpty()' должно быть общим для всех режимов.
                         when {
                             // Тройной клик
                             input.isEmpty() && flagDoobleClic == 3 -> {
                                 isProgrammingMode = true // Активируем режим
                                 speakText("Вы зашли в режим назначения номеров быстрого набора. Наберите номер и букву за которой он будет закреплен")
-                                // Таймер для выхода из режима, если ничего не происходит (20 секунд)
-                                delay(30000)
-                                if (isProgrammingMode) {
-                                    isProgrammingMode = false
-                                    speakText("Время назначения номера истекло, произведен выход из режима")
-                                }
                             }
 
                             // Двойной клик
@@ -1200,7 +1244,6 @@ class MainRepositoryImpl(
                                 speakText("Наберите номер")
                             }
                         }
-
                         // Сброс флага
                         flagDoobleClic = 0
                     }
@@ -1209,6 +1252,7 @@ class MainRepositoryImpl(
                 // Прием входящего вызова по нажатию звездочки
                 if (getCall() != null) {
                     if (getCallState() == 2) {
+                        textToSpeech.stop() // Остановка ТТС чтобы не слышать вам звонит такой-то
                         DtmfService.callAnswer(context)
                         setInput("")
                     }
@@ -1870,15 +1914,15 @@ class MainRepositoryImpl(
                 flagAmplitude = false // Выход из режима измерения амплитуды
                 flagFrequency = false // Выход из режима измерения частоты
                 flagSelective = false // Блокировка управления режимом селективного вызова
-                flagSimMonitor = false // Выход из режима попыток дозвониться
+                flagSimMonitor = false // Выход из режима попыток дозвониться при поиске точки расположения репитера
                 isContactMode = false // Выход из режима листания контактов
-                setFlagFrequencyLowHigt(false)
+                setFlagFrequencyLowHigt(false) // Отключение отображения верхней и нижней частоты DTMF
                 flagDtmf = false // Отключение генератора двухтональных команд
                 textToSpeech.stop() // Остановка ТТС
                 isSpeaking = false
                 flagFlashLight = false // Сброс флага управления вспышкой по нажатию PTT
+                isProgrammingMode = false // Выход из режима программирования номеров быстрого набора
                 setFlashlight(false) // Отключаем вспышку если она включена
-                // setInput2("") // Стирание номера запомненного при двойном клике звездочкой
 
                 if (getCall() == null) {
                     setInput("")
@@ -1913,51 +1957,65 @@ class MainRepositoryImpl(
                         utils.lastMissed(context, false)
                     }
 
-                    // остановка будильника по команде 00#
+                    // Остановка будильника и маяка по команде 00#
                     else if (input == "00" && getCall() == null) {
+                        isBeaconActiveManually = false
                         alarmScheduler.stopAlarm()
                         speakText("Будильник и маяк отключены")
                     }
 
                     // Маяк для определения зоны покрытия 2#
                     else if (input == "2" && getCall() == null) {
+                        isBeaconActiveManually = true
                         playSoundJob.launch {
-                            speakText(
-                                "Вы запускаете маяк для определения зоны действия репитера. Установите время работы в 24-часовом формате")
+                            speakText("Вы запускаете маяк для определения зоны действия репитера. Введите время его работы в двадцати четырех часовом формате")
                             setInput("")
                             delay(20000)
                             val timeInput = getInput()
+                            setInput("")
 
-                            if (timeInput.isNullOrEmpty()) {
-                                val repetitions = 20L
-                                speakText("Маяк запущен по умолчанию на 10 минут. Сигнал будет звучать каждые 30 секунд. Для отключения маяка наберите два нуля решетку")
+                            var totalSeconds = 600 // По умолчанию 10 минут
 
-                                val calendar = Calendar.getInstance()
-                                calendar.add(Calendar.MINUTE, 1)
-                                val currentHours = calendar.get(Calendar.HOUR_OF_DAY)
-                                val currentMinutes = calendar.get(Calendar.MINUTE)
-
-                                alarmScheduler.setAlarm(currentHours, currentMinutes, 30000L, repetitions)
-
-                            } else if (timeInput.length != 4 || !timeInput.all { it.isDigit() }) {
-                                speakText("Введите 4 цифры")
+                            if (timeInput?.length == 4 && timeInput.all { it.isDigit() }) {
+                                val h = timeInput.substring(0, 2).toIntOrNull() ?: 0
+                                val m = timeInput.substring(2, 4).toIntOrNull() ?: 0
+                                totalSeconds = (h * 3600) + (m * 60)
+                                speakText("Маяк запущен на ${utils.formatRussianTime(h, m)}")
                             } else {
-                                val inputHours = timeInput.substring(0, 2).toIntOrNull()
-                                val inputMinutes = timeInput.substring(2, 4).toIntOrNull()
+                                speakText("Маяк запущен на 10 минут по умолчанию")
+                            }
 
-                                if (inputHours != null && inputMinutes != null && inputHours in 0..23 && inputMinutes in 0..59) {
-                                    val totalMinutes = inputHours * 60 + inputMinutes
-                                    val repetitions = (totalMinutes * 60) / 30L
-                                    speakText("Маяк запущен на ${utils.formatRussianTime(inputHours, inputMinutes)}. Сигнал будет звучать каждые 30 секунд. Для отключения маяка наберите два нуля решетку")
+                            if (totalSeconds > 0) {
+                                val startTime = System.currentTimeMillis()
+                                // Добавляем небольшую погрешность (500мс), чтобы пограничное время (ровно 2 мин) не обрывало цикл
+                                val endTime = startTime + (totalSeconds * 1000L) + 500L
 
-                                    val calendar = Calendar.getInstance()
-                                    calendar.add(Calendar.MINUTE, 1)
-                                    val currentHours = calendar.get(Calendar.HOUR_OF_DAY)
-                                    val currentMinutes = calendar.get(Calendar.MINUTE)
+                                // ЦИКЛ МАЯКА
+                                while (isBeaconActiveManually) {
+                                    // Проверяем, есть ли смысл ждать следующие 30 секунд
+                                    if (System.currentTimeMillis() + 30000L > endTime) break
 
-                                    alarmScheduler.setAlarm(currentHours, currentMinutes, 30000L, repetitions)
-                                } else {
-                                    speakText("Некорректное время. Часы должны быть от 0 до 23, минуты от 0 до 59")
+                                    delay(30000)
+
+                                    if (!isBeaconActiveManually) break
+
+                                    // ЗАПУСКАЕМ ОДИН СИГНАЛ
+                                    val intent = Intent(context, AlarmSoundService::class.java).apply {
+                                        putExtra("ALARM_PERIOD", 30000L)
+                                        putExtra("ALARM_PART", 1L)
+                                    }
+                                    context.startService(intent)
+                                }
+
+                                // ФИНАЛ
+                                if (isBeaconActiveManually) {
+                                    // После последнего сигнала (например, на 02:00)
+                                    // даем звуку проиграть (например, 2-3 секунды) перед фразой об отключении
+                                    delay(3000)
+
+                                    alarmScheduler.stopAlarm()
+                                    speakText("Время действия маяка истекло. Маяк отключен")
+                                    isBeaconActiveManually = false
                                 }
                             }
                             setInput("")
@@ -2034,13 +2092,6 @@ class MainRepositoryImpl(
                     // Очистка номеров быстрого набора по команде 6*
                     else if (input == "6" && getCall() == null) {
                         speakText("Команда не назначена")
-//                        textToSpeech.setOnUtteranceProgressListener(null)
-//                        numberA = ""
-//                        numberB = ""
-//                        numberC = ""
-//                        numberD = ""
-//                        lastDialedNumber = ""
-//                        speakText("Все номера быстрого набора, были очищены")
                         setInput("")
                     }
 
@@ -2264,7 +2315,6 @@ class MainRepositoryImpl(
     // Запуск дтмф анализа
     override fun startDtmf() {
         setStatusDtmf(true)
-        Log.d("Контрольный лог", "startDtmf()")
         DtmfService.start(context)
         initJob()
         setInput("")
@@ -2285,7 +2335,6 @@ class MainRepositoryImpl(
     // Остановка дтмф анализа
     override fun stopDtmf() {
         setStatusDtmf(false)
-        Log.d("Контрольный лог", "stopDtmf()")
         setInput("")
         isSpeaking = false
         job.cancel()

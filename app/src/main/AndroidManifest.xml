@@ -34,6 +34,7 @@
     <uses-permission android:name="android.permission.RECEIVE_SMS"/>
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
+    <uses-permission android:name="android.permission.DISABLE_KEYGUARD" />
 
 
     <!-- вот эти разрешения скорее всего надо будет удалить -->
@@ -88,7 +89,7 @@
 
         <service
             android:name=".service.DtmfService"
-            android:foregroundServiceType="microphone"
+            android:foregroundServiceType="microphone|mediaPlayback"
             android:exported="true">
         </service>
 

@@ -24,9 +24,16 @@ class AlarmSoundService : Service() {
 
     private fun playAlarmWithRepetitions() {
         serviceScope.launch {
-            for (pass in 1..alarmPart) {
-                if (pass < alarmPart) delay(alarmPeriod)
+            // Если это МАЯК (30 сек), играем только 1 раз (потому что корутина в меню сама его перезапустит)
+            if (alarmPeriod == 30000L) {
                 playSound()
+            }
+            // Если это БУДИЛЬНИК (60 сек или другое), используем цикл повторов играем мелодию 5 раз через 1 минуту
+            else {
+                for (pass in 1..alarmPart) {
+                    playSound()
+                    if (pass < alarmPart) delay(alarmPeriod)
+                }
             }
             stopSelf()
         }

@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.telecom.TelecomManager
 import android.telecom.VideoProfile
 import android.telephony.SubscriptionManager
@@ -172,6 +173,7 @@ class DtmfService : Service(), KoinComponent {
             .setContentTitle("DTMF Телефон")
             .setContentText("Распознавание DTMF работает")
             .setPriority(NotificationCompat.PRIORITY_LOW) // Устанавливаем низкий приоритет
+            .setOngoing(true) // Уведомление нельзя смахнуть
             .build()
         startForeground(1, notification)
     }
