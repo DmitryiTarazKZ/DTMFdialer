@@ -12,7 +12,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.os.PowerManager
 import android.telecom.TelecomManager
 import android.telecom.VideoProfile
 import android.telephony.SubscriptionManager
@@ -25,18 +24,99 @@ import org.koin.core.component.KoinComponent
 
 class DtmfService : Service(), KoinComponent {
     private val mainRepository: MainRepository by inject()
+    private var wakeLock: android.os.PowerManager.WakeLock? = null
 
     override fun onBind(intent: Intent): IBinder? {
         return null
     }
 
+//    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+//        when (intent?.action) {
+//            ACTION_START -> start()
+//            ACTION_CALL_START -> startCall()
+//            ACTION_CALL_ANSWER -> answerCall()
+//            ACTION_CALL_END -> endCall()
+//            ACTION_STOP -> stop()
+//        }
+//        return START_STICKY
+//    }
+
+    // 2. Добавляем метод onCreate (выполняется ОДИН раз при самом первом запуске сервиса)
+    override fun onCreate() {
+        super.onCreate()
+
+        // Включаем "защиту от сна" для процессора
+        val powerManager = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+        wakeLock = powerManager.newWakeLock(
+            android.os.PowerManager.PARTIAL_WAKE_LOCK,
+            "DTMF:WakeLock"
+        ).apply {
+            acquire()
+        }
+    }
+
+    // 3. Добавляем метод onDestroy (выполняется, когда сервис полностью выключается)
+    override fun onDestroy() {
+        // 1. Сначала останавливаем микрофон и тяжелую логику.
+        // Пока процессор еще гарантированно работает.
+        try {
+            mainRepository.stopDtmf()
+        } catch (e: Exception) {
+            // Логируем, если что-то пошло не так
+        }
+
+        // 2. Теперь, когда всё "железо" выключено, отпускаем процессор.
+        if (wakeLock?.isHeld == true) {
+            wakeLock?.release()
+        }
+        wakeLock = null // Хорошим тоном будет обнулить ссылку
+
+        // 3. Завершаем работу сервиса
+        super.onDestroy()
+    }
+
+    private fun getStatsPrefs() = getSharedPreferences("dtmf_stats", Context.MODE_PRIVATE)
+
+    private fun resetStats() {
+        val time = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
+        val date = java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.getDefault()).format(java.util.Date())
+
+        getStatsPrefs().edit()
+            .putString("start_time", "$time $date")
+            .putInt("restart_count", 0)
+            .apply()
+    }
+
+    private fun getStatsString(): String {
+        val prefs = getStatsPrefs()
+        val startInfo = prefs.getString("start_time", "--:-- --.**.****")
+        val restarts = prefs.getInt("restart_count", 0)
+
+        return "Старт в $startInfo\nПерезапусков: $restarts"
+    }
+
+    private fun incrementRestartCount() {
+        val current = getStatsPrefs().getInt("restart_count", 0)
+        getStatsPrefs().edit().putInt("restart_count", current + 1).apply()
+    }
+
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_START -> start()
-            ACTION_CALL_START -> startCall()
-            ACTION_CALL_ANSWER -> answerCall()
-            ACTION_CALL_END -> endCall()
-            ACTION_STOP -> stop()
+        val action = intent?.action
+
+        if (action == ACTION_START) {
+            resetStats() // Сбрасываем стат при ручном запуске
+            start()
+        } else if (action == null) {
+            incrementRestartCount() // Увеличиваем счетчик, если это авто-воскрешение
+            start()
+        } else {
+            when (action) {
+                ACTION_CALL_START -> startCall()
+                ACTION_CALL_ANSWER -> answerCall()
+                ACTION_CALL_END -> endCall()
+                ACTION_STOP -> stop()
+            }
         }
         return START_STICKY
     }
@@ -111,11 +191,11 @@ class DtmfService : Service(), KoinComponent {
             } else {
 
                 if (slot1 == "Нет сигнала") {
-                    mainRepository.speakText("Звоню с $slot2}")
+                    mainRepository.speakText("Звоню с $slot2")
                 }
 
                 if (slot2 == "Нет сигнала") {
-                    mainRepository.speakText("Звоню с $slot1}")
+                    mainRepository.speakText("Звоню с $slot1")
                 }
 
                 Handler(Looper.getMainLooper()).postDelayed({
@@ -147,6 +227,7 @@ class DtmfService : Service(), KoinComponent {
 
     private fun start() {
         updateForegroundNotification()
+        mainRepository.startDtmfInternal()
     }
 
     private fun stop() {
@@ -161,22 +242,38 @@ class DtmfService : Service(), KoinComponent {
 
     private fun updateForegroundNotification() {
         val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+
+        val contentIntent = Intent(this, com.mcal.dtmf.MainActivity::class.java)
+        val contentPendingIntent = android.app.PendingIntent.getActivity(
+            this, 0, contentIntent,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+                android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+            else android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                NOTIFICATION_CHANNEL_ID, NOTIFICATION_CHANNEL_ID,
-                NotificationManager.IMPORTANCE_LOW // Устанавливаем низкий приоритет
+                NOTIFICATION_CHANNEL_ID, "Служба DTMF",
+                NotificationManager.IMPORTANCE_LOW
             )
             notificationManager.createNotificationChannel(channel)
         }
+
+        val stats = getStatsString()
+
         val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle("DTMF Телефон")
-            .setContentText("Распознавание DTMF работает")
-            .setPriority(NotificationCompat.PRIORITY_LOW) // Устанавливаем низкий приоритет
-            .setOngoing(true) // Уведомление нельзя смахнуть
+            .setContentText(stats) // Для свернутого вида
+            .setStyle(NotificationCompat.BigTextStyle().bigText(stats)) // Для развернутого вида (в 2 строки)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setContentIntent(contentPendingIntent)
+            .setOngoing(true)
             .build()
+
         startForeground(1, notification)
     }
+
 
     companion object {
         internal const val ACTION_CALL_START = "call_start"
@@ -207,7 +304,12 @@ class DtmfService : Service(), KoinComponent {
         fun start(context: Context) {
             val intent = Intent(context, DtmfService::class.java)
             intent.setAction(ACTION_START)
-            context.startService(intent)
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent) // Обязательно для Android 8+
+            } else {
+                context.startService(intent)
+            }
         }
 
         fun stop(context: Context) {

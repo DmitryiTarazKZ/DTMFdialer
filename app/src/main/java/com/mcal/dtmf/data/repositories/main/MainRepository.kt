@@ -132,6 +132,8 @@ interface MainRepository {
 
     fun startDtmf()
 
+    fun startDtmfInternal()
+
     fun speakText(text: String)
 
     suspend fun speakSuperTelephone()

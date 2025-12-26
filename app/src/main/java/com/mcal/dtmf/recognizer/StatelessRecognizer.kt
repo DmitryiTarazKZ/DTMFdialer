@@ -8,22 +8,22 @@ class StatelessRecognizer(private val spectrum: Spectrum) : KoinComponent {
     private val mainRepository: MainRepository by inject() // инжектирование переменной в репозиторий
     // Массив частот и соответствующих символов
     private val tones = listOf(
-        Pair(45 to 77, '1'), // DTMF tone for key 1: 1209Hz, 697Hz, continuous
-        Pair(45 to 86, '2'), // DTMF tone for key 2: 1336Hz, 697Hz, continuous
-        Pair(45 to 95, '3'), // DTMF tone for key 3: 1477Hz, 697Hz, continuous
-        Pair(49 to 77, '4'), // DTMF tone for key 4: 1209Hz, 770Hz, continuous
-        Pair(49 to 86, '5'), // DTMF tone for key 5: 1336Hz, 770Hz, continuous
-        Pair(49 to 95, '6'), // DTMF tone for key 6: 1477Hz, 770Hz, continuous
-        Pair(55 to 77, '7'), // DTMF tone for key 7: 1209Hz, 852Hz, continuous
-        Pair(55 to 86, '8'), // DTMF tone for key 8: 1336Hz, 852Hz, continuous
-        Pair(55 to 95, '9'), // DTMF tone for key 9: 1477Hz, 852Hz, continuous
-        Pair(60 to 77, '*'), // DTMF tone for key *: 1209Hz, 941Hz, continuous
-        Pair(60 to 86, '0'), // DTMF tone for key 0: 1336Hz, 941Hz, continuous
-        Pair(60 to 95, '#'), // DTMF tone for key #: 1477Hz, 941Hz, continuous
-        Pair(45 to 106, 'A'), // DTMF tone for key A: 1633Hz, 697Hz, continuous
-        Pair(49 to 106, 'B'), // DTMF tone for key B: 1633Hz, 770Hz, continuous
-        Pair(55 to 106, 'C'), // DTMF tone for key C: 1633Hz, 852Hz, continuous
-        Pair(60 to 106, 'D')  // DTMF tone for key D: 1633Hz, 941Hz, continuous
+        Pair(45 to 77, '1'),  // 1209Hz, 697Hz
+        Pair(45 to 86, '2'),  // 1336Hz, 697Hz
+        Pair(45 to 95, '3'),  // 1477Hz, 697Hz
+        Pair(49 to 77, '4'),  // 1209Hz, 770Hz
+        Pair(49 to 86, '5'),  // 1336Hz, 770Hz
+        Pair(49 to 95, '6'),  // 1477Hz, 770Hz
+        Pair(55 to 77, '7'),  // 1209Hz, 852Hz
+        Pair(55 to 86, '8'),  // 1336Hz, 852Hz
+        Pair(55 to 95, '9'),  // 1477Hz, 852Hz
+        Pair(60 to 77, '*'),  // 1209Hz, 941Hz
+        Pair(60 to 86, '0'),  // 1336Hz, 941Hz
+        Pair(60 to 95, '#'),  // 1477Hz, 941Hz
+        Pair(45 to 106, 'A'), // 1633Hz, 697Hz
+        Pair(49 to 106, 'B'), // 1633Hz, 770Hz
+        Pair(55 to 106, 'C'), // 1633Hz, 852Hz
+        Pair(60 to 106, 'D')  // 1633Hz, 941Hz
     )
 
     fun getRecognizedKey(): Char {

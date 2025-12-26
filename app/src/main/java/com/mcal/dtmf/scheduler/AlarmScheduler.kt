@@ -19,7 +19,7 @@ class AlarmScheduler(
     }
     private lateinit var alarmPendingIntent: PendingIntent
 
-    private val ALARM_REQUEST_CODE = 1001
+    private val alarmRequestCode = 1001
 
     fun setAlarm(hours: Int, minutes: Int, period: Long, part: Long) {
         val calendar = Calendar.getInstance().apply {
@@ -42,7 +42,7 @@ class AlarmScheduler(
 
         alarmPendingIntent = PendingIntent.getBroadcast(
             context,
-            ALARM_REQUEST_CODE,
+            alarmRequestCode,
             alarmIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )

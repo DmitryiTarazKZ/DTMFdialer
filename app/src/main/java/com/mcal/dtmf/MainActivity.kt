@@ -7,10 +7,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.hardware.Sensor
-import android.hardware.SensorEvent
-import android.hardware.SensorEventListener
-import android.hardware.SensorManager
 import android.media.AudioManager
 import android.os.BatteryManager
 import android.os.Build
@@ -18,7 +14,6 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Telephony
 import android.telecom.TelecomManager
-import android.util.Log
 import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -34,20 +29,18 @@ import cafe.adriel.voyager.navigator.Navigator
 import cafe.adriel.voyager.transitions.SlideTransition
 import com.mcal.dtmf.data.repositories.main.MainRepository
 import com.mcal.dtmf.receiver.BootReceiver
+import com.mcal.dtmf.service.DtmfService
 import com.mcal.dtmf.ui.main.MainScreen
 import com.mcal.dtmf.ui.theme.VoyagerDialogTheme
-import com.mcal.dtmf.utils.Utils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
-import kotlin.math.atan2
 
 class MainActivity : ComponentActivity() {
     private val mainRepository: MainRepository by inject()
     private val permissionCode = 100
-    private var wakeLock: PowerManager.WakeLock? = null
 
     private val powerReceiver: BroadcastReceiver = object : BootReceiver() {
         override fun onReceive(context: Context, intent: Intent?) {
@@ -66,41 +59,61 @@ class MainActivity : ComponentActivity() {
             if (intent?.action == Intent.ACTION_HEADSET_PLUG) {
                 val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
                 audioManager.ringerMode = if (intent.getIntExtra("state", 0) == 1) {
-                mainRepository.speakText("Соеденение смартфона и радиостанции произведено успешно, убедитесь что в параметрах разработчика включено: Не отключать экран во время зарядки")
+                mainRepository.speakText("Соеденение смартфона и радиостанции произведено успешно")
                 AudioManager.RINGER_MODE_SILENT
                 } else {
-                mainRepository.speakText("Соедените смартфон и радиостанцию, в параметрах разработчика включите: Не отключать экран во время зарядки")
+                mainRepository.speakText("Соедените смартфон и радиостанцию")
                 AudioManager.RINGER_MODE_NORMAL }
             }
         }
     }
 
-    private val screenStateReceiver: BroadcastReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            when (intent.action) {
-                Intent.ACTION_SCREEN_OFF -> {
-                    mainRepository.speakText("Экран отключен")
 
-                    // Запускаем пробуждение через полсекунды
-                    CoroutineScope(Dispatchers.Main).launch {
-                        delay(500)
-                        val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-                        val wl = pm.newWakeLock(
-                            PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
-                                    PowerManager.ACQUIRE_CAUSES_WAKEUP or
-                                    PowerManager.ON_AFTER_RELEASE,
-                            "DTMFApp::RepeaterWakeup"
-                        )
-                        wl.acquire(1000) // Включаем
-                        if (wl.isHeld) wl.release()
-                    }
-                }
-                Intent.ACTION_SCREEN_ON -> {
-                    mainRepository.speakText("Экран включен")
-                }
-            }
-        }
-    }
+    // БОРЬБА ЗА ЖИВУЧЕСТЬ ПРИЛОЖЕНИЯ. в параметрах разработчика включить не отключать экран при зарядке
+//    private val screenStateReceiver: BroadcastReceiver = object : BroadcastReceiver() {
+//        override fun onReceive(context: Context, intent: Intent) {
+//            when (intent.action) {
+//                Intent.ACTION_SCREEN_OFF -> {
+//                    mainRepository.speakText("Внимание! Приложение потеряло фокус, или произошло отключение экрана по системному таймауту")
+//
+//                    // Запускаем пробуждение через время
+//                    CoroutineScope(Dispatchers.Main).launch {
+//                        delay(10000)
+//                        val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+//                        val wl = pm.newWakeLock(
+//                            PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
+//                                    PowerManager.ACQUIRE_CAUSES_WAKEUP or
+//                                    PowerManager.ON_AFTER_RELEASE,
+//                            "DTMFApp::RepeaterWakeup"
+//                        )
+//                        wl.acquire(5000) // Включаем на 5 секунд дальше подхватит FLAG_KEEP_SCREEN_ON
+//                        if (wl.isHeld) wl.release()
+//                    }
+//                }
+//
+//                Intent.ACTION_SCREEN_ON -> {
+//                    // 1. Сразу останавливаем (без корутины)
+//                    mainRepository.stopDtmf()
+//
+//                    // 2. Автоматический вывод приложения на передний план
+//                    val intentToApp = Intent(context, MainActivity::class.java).apply {
+//                        // Эти флаги нужны, чтобы запустить Activity из фонового процесса (ресивера)
+//                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+//                        addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT) // Если приложение открыто, просто выведет его наверх
+//                    }
+//                    context.startActivity(intentToApp)
+//
+//                    mainRepository.speakText("Экран включен. Приложение возвращено на передний план.")
+//
+//                    // 3. А запуск микрофона делаем через паузу в корутине
+//                    CoroutineScope(Dispatchers.Main).launch {
+//                        delay(1000)
+//                        mainRepository.startDtmf()
+//                    }
+//                }
+//            }
+//        }
+//    }
 
     // Ресивер для автоматического озвучивания входящих SMS
 
@@ -128,23 +141,24 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
-        when (keyCode) {
+        // Return выносится вперед, и весь блок when возвращает результат
+        return when (keyCode) {
             KeyEvent.KEYCODE_HEADSETHOOK -> {
                 mainRepository.setMicKeyClick(0)
-                return true
+                true // возвращаемое значение для этого случая
             }
-            else -> return super.onKeyUp(keyCode, event)
+            else -> super.onKeyUp(keyCode, event)
         }
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        super.onKeyDown(keyCode, event)
-        when (keyCode) {
+        // В onKeyDown важно проверить логику вызова super
+        return when (keyCode) {
             KeyEvent.KEYCODE_HEADSETHOOK -> {
                 mainRepository.setMicKeyClick(KeyEvent.KEYCODE_HEADSETHOOK)
-                return true
+                true
             }
-            else -> return super.onKeyDown(keyCode, event)
+            else -> super.onKeyDown(keyCode, event)
         }
     }
 
@@ -169,7 +183,16 @@ class MainActivity : ComponentActivity() {
             }
         }
         registerReceivers()
-        mainRepository.startDtmf()
+        // Вместо mainRepository.startDtmf()
+        // 1. Обычный старт сервиса
+        DtmfService.start(this)
+
+        // 2. ТЕСТ: Имитируем воскрешение системы через 5 секунд
+//        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+//            android.util.Log.d("Контрольный лог", "--- ОТПРАВКА ТЕСТОВОГО NULL-INTENT ---")
+//            val testIntent = Intent(this, DtmfService::class.java)
+//            startService(testIntent)
+//        }, 5000)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
@@ -180,11 +203,11 @@ class MainActivity : ComponentActivity() {
         intentFilter.addAction(Intent.ACTION_POWER_CONNECTED)
         intentFilter.addAction(Intent.ACTION_POWER_DISCONNECTED)
         registerReceiver(powerReceiver, intentFilter)
-        val screenStateFilter = IntentFilter().apply {
-            addAction(Intent.ACTION_SCREEN_OFF)
-            addAction(Intent.ACTION_SCREEN_ON)
-        }
-        registerReceiver(screenStateReceiver, screenStateFilter)
+//        val screenStateFilter = IntentFilter().apply {
+//            addAction(Intent.ACTION_SCREEN_OFF)
+//            addAction(Intent.ACTION_SCREEN_ON)
+//        }
+//        registerReceiver(screenStateReceiver, screenStateFilter)
         val smsFilter = IntentFilter(Telephony.Sms.Intents.SMS_RECEIVED_ACTION)
         registerReceiver(smsReceiver, smsFilter)
     }
@@ -362,10 +385,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onPause() {
-        super.onPause()
-    }
-
     override fun onResume() {
         super.onResume()
         // Принудительно подтверждаем, что экран не должен гаснуть
@@ -376,7 +395,7 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
         unregisterReceiver(headphoneReceiver)
         unregisterReceiver(powerReceiver)
-        unregisterReceiver(screenStateReceiver)
+//        unregisterReceiver(screenStateReceiver)
         unregisterReceiver(smsReceiver)
         mainRepository.stopDtmf()
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)

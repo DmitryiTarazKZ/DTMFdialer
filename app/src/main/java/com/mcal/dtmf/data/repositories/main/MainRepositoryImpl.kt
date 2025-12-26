@@ -18,6 +18,7 @@ import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.telecom.Call
+import android.util.Log
 import com.mcal.dtmf.recognizer.DataBlock
 import com.mcal.dtmf.recognizer.Recognizer
 import com.mcal.dtmf.recognizer.Spectrum
@@ -41,7 +42,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.Calendar
 import java.util.Locale
 import java.util.concurrent.LinkedBlockingQueue
 import kotlin.math.abs
@@ -111,10 +111,10 @@ class MainRepositoryImpl(
     private var isBeaconActiveManually = false // Флаг работы маяка
 
     // Ключи для SharedPreferences.
-    private val KEY_A = "QUICK_DIAL_A"
-    private val KEY_B = "QUICK_DIAL_B"
-    private val KEY_C = "QUICK_DIAL_C"
-    private val KEY_D = "QUICK_DIAL_D"
+    private val keyA = "QUICK_DIAL_A"
+    private val keyB = "QUICK_DIAL_B"
+    private val keyC = "QUICK_DIAL_C"
+    private val keyD = "QUICK_DIAL_D"
 
     /**
      * Загружает номер быстрого набора (строка) из SharedPreferences.
@@ -275,10 +275,10 @@ class MainRepositoryImpl(
         }
 
         // --- ДОБАВЛЕНО: ЗАГРУЗКА СОХРАНЕННЫХ НОМЕРОВ БЫСТРОГО НАБОРА ---
-        numberA = loadQuickDialNumber(context, KEY_A)
-        numberB = loadQuickDialNumber(context, KEY_B)
-        numberC = loadQuickDialNumber(context, KEY_C)
-        numberD = loadQuickDialNumber(context, KEY_D)
+        numberA = loadQuickDialNumber(context, keyA)
+        numberB = loadQuickDialNumber(context, keyB)
+        numberC = loadQuickDialNumber(context, keyC)
+        numberD = loadQuickDialNumber(context, keyD)
         // -----------------------------------------------------------------
     }
 
@@ -1078,7 +1078,6 @@ class MainRepositoryImpl(
 
                         // 1. Проверяем, что введен номер для сохранения
                         if (input.length in 3..11) {
-                            val numberToSave = input
 
                             // 2. Проверяем, не закреплен ли этот номер уже за другой клавишей
                             val currentNumberA = numberA
@@ -1087,10 +1086,10 @@ class MainRepositoryImpl(
                             val currentNumberD = numberD
 
                             if (
-                                (key != 'A' && numberToSave == currentNumberA && currentNumberA.isNotEmpty()) ||
-                                (key != 'B' && numberToSave == currentNumberB && currentNumberB.isNotEmpty()) ||
-                                (key != 'C' && numberToSave == currentNumberC && currentNumberC.isNotEmpty()) ||
-                                (key != 'D' && numberToSave == currentNumberD && currentNumberD.isNotEmpty())
+                                (key != 'A' && input == currentNumberA && currentNumberA.isNotEmpty()) ||
+                                (key != 'B' && input == currentNumberB && currentNumberB.isNotEmpty()) ||
+                                (key != 'C' && input == currentNumberC && currentNumberC.isNotEmpty()) ||
+                                (key != 'D' && input == currentNumberD && currentNumberD.isNotEmpty())
                             ) {
                                 flagDoobleClic = 0 // прекращаем ожидание выполнения кода тройного клика
                                 speakText("Этот номер уже закреплен за другой клавишей")
@@ -1108,7 +1107,7 @@ class MainRepositoryImpl(
                                 else -> ""
                             }
 
-                            if (numberToSave == currentTargetNumber) {
+                            if (input == currentTargetNumber) {
                                 flagDoobleClic = 0 // прекращаем ожидание выполнения кода тройного клика
                                 speakText("Этот номер ранее был закреплен за этой клавишей")
                                 setInput("")
@@ -1118,25 +1117,25 @@ class MainRepositoryImpl(
 
                                 when (key) {
                                     'A' -> {
-                                        numberA = numberToSave
-                                        saveQuickDialNumber(context, KEY_A, numberToSave)
+                                        numberA = input
+                                        saveQuickDialNumber(context, keyA, input)
                                     }
                                     'B' -> {
-                                        numberB = numberToSave
-                                        saveQuickDialNumber(context, KEY_B, numberToSave)
+                                        numberB = input
+                                        saveQuickDialNumber(context, keyB, input)
                                     }
                                     'C' -> {
-                                        numberC = numberToSave
-                                        saveQuickDialNumber(context, KEY_C, numberToSave)
+                                        numberC = input
+                                        saveQuickDialNumber(context, keyC, input)
                                     }
                                     'D' -> {
-                                        numberD = numberToSave
-                                        saveQuickDialNumber(context, KEY_D, numberToSave)
+                                        numberD = input
+                                        saveQuickDialNumber(context, keyD, input)
                                     }
                                 }
 
-                                val num = utils.numberToText(numberToSave)
-                                val callerName = utils.getContactNameByNumber(numberToSave, context)
+                                val num = utils.numberToText(input)
+                                val callerName = utils.getContactNameByNumber(input, context)
                                 flagDoobleClic = 0 // прекращаем ожидание выполнения кода тройного клика
                                 val confirmationMessage = if (callerName.isNullOrEmpty()) {
                                     "Номер $num был закреплен за этой клавишей"
@@ -1915,6 +1914,7 @@ class MainRepositoryImpl(
                 flagFrequency = false // Выход из режима измерения частоты
                 flagSelective = false // Блокировка управления режимом селективного вызова
                 flagSimMonitor = false // Выход из режима попыток дозвониться при поиске точки расположения репитера
+                callStates.clear() // Очищаем массив по которому проводится анализ начался ли дозвон (есть ли сеть)
                 isContactMode = false // Выход из режима листания контактов
                 setFlagFrequencyLowHigt(false) // Отключение отображения верхней и нижней частоты DTMF
                 flagDtmf = false // Отключение генератора двухтональных команд
@@ -2103,24 +2103,24 @@ class MainRepositoryImpl(
                     }
 
                     // Пролиставание и прослушивание помощи
-                    else if (input.equals("8") && getCall() == null) {
+                    else if (input == "8" && getCall() == null) {
                         if (block) {
                             if (!isHelpMode) {
                                 // Загружаем предложения из локального списка
-                                sentences = getHelpSentences();
+                                sentences = getHelpSentences()
                                 if (sentences.isEmpty()) {
-                                    speakText("Список помощи пуст.");
-                                    setInput("");
+                                    speakText("Список помощи пуст.")
+                                    setInput("")
                                 } else {
-                                    isHelpMode = true; // Разрешение на пролистывание помоши
-                                    currentSentenceIndex = 0;  // Начинаем с начала списка команд
-                                    speakText("Вы зашли в полный раздел описания функциональности репитера. Для перемещения по описанию, по одному предложению, используйте 7 и 1. по 10 предложений, 8 и 2. по 100 предложений, 9 и 3.");
-                                    setInput("");
+                                    isHelpMode = true // Разрешение на пролистывание помоши
+                                    currentSentenceIndex = 0  // Начинаем с начала списка команд
+                                    speakText("Вы зашли в полный раздел описания функциональности репитера. Для перемещения по описанию, по одному предложению, используйте 7 и 1. по 10 предложений, 8 и 2. по 100 предложений, 9 и 3.")
+                                    setInput("")
                                 }
                             }
                         } else {
-                            speakText("Команда заблокирована");
-                            setInput("");
+                            speakText("Команда заблокирована")
+                            setInput("")
                         }
                     }
 
@@ -2313,9 +2313,28 @@ class MainRepositoryImpl(
     }
 
     // Запуск дтмф анализа
+//    override fun startDtmf() {
+//        setStatusDtmf(true)
+//        DtmfService.start(context)
+//        initJob()
+//        setInput("")
+//        recorderJob.launch { record() }
+//        recognizerJob.launch { recognize() }
+//        if (getMagneticFieldFlag()) { setTimer(30000) }
+//    }
+
+
+    // 1. Этот метод вызывается из Активити
     override fun startDtmf() {
+        DtmfService.start(context) // Просто «пинаем» сервис
+    }
+
+    // 2. Этот метод вызывает только Сервис
+    override fun startDtmfInternal() {
         setStatusDtmf(true)
-        DtmfService.start(context)
+        if (job.isActive) {
+            job.cancel()
+        }
         initJob()
         setInput("")
         recorderJob.launch { record() }
