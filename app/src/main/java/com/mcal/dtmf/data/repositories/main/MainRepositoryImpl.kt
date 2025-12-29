@@ -5,6 +5,7 @@ import android.app.Application
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.hardware.camera2.CameraManager
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -13,12 +14,16 @@ import android.media.MediaRecorder
 import android.media.ToneGenerator
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.telecom.Call
+import android.telephony.SubscriptionManager
 import android.util.Log
+import androidx.core.app.ActivityCompat
 import com.mcal.dtmf.recognizer.DataBlock
 import com.mcal.dtmf.recognizer.Recognizer
 import com.mcal.dtmf.recognizer.Spectrum
@@ -44,6 +49,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.jar.Manifest
 import kotlin.math.abs
 import kotlin.time.DurationUnit
 import kotlin.time.toDuration
@@ -53,6 +59,16 @@ class MainRepositoryImpl(
     private var textToSpeech: TextToSpeech,
 
     ) : MainRepository {
+    private var isTtsInitialized = false
+    private var isSpeaking = false
+    // 1. Текст надиктованного сообщения (ждем, пока выберут SIM)
+    private var pendingSmsText: String = ""
+
+    // 2. Флаг: находимся ли мы сейчас в режиме ожидания нажатия 1 или 2
+    private var isWaitingForSimChoice: Boolean = false
+
+    // 3. (Опционально, но полезно) Время начала ожидания, чтобы потом сбросить режим по таймауту
+    private var simChoiceWaitStartTime: Long = 0L
     private var utils = Utils(this, CoroutineScope(Dispatchers.IO), context)
     private var job = SupervisorJob()
     private var scope = CoroutineScope(Dispatchers.IO + job)
@@ -69,6 +85,7 @@ class MainRepositoryImpl(
     private val _call: MutableStateFlow<Call?> = MutableStateFlow(null)
     private val _callState: MutableStateFlow<Int> = MutableStateFlow(Call.STATE_DISCONNECTED)
     private val _powerState: MutableStateFlow<Boolean?> = MutableStateFlow(null)
+    private val _headsetState = MutableStateFlow<Boolean?>(null)
     private val _isPlaying: MutableStateFlow<Boolean?> = MutableStateFlow(null)
     private val _isRecording: MutableStateFlow<Boolean?> = MutableStateFlow(null)
     private val _amplitudeCheck: MutableStateFlow<Boolean?> = MutableStateFlow(null)
@@ -104,7 +121,6 @@ class MainRepositoryImpl(
     private var amplitudePtt: Double = 150.000 // Установка начальной точки амплитуды входного сигнала (используется для автоматической остановки записи голосовых заметок
     private var amplitudeCtcssCorrect: Double = 0.02 // Корректирующее значения прибавляется к установленному уровню в момент поднятия трубки
     private var isTorchOnIs = 5 // Задано 5 чтобы исключить случайное срабатывание (Внимание открытый канал...)
-    private var isSpeaking = false
     private var currentTorchState: Boolean? = null  // Текущее состояние вспышки для оптимизации (централизованное управление)
     private var monitorNumber: String = "87057895564" // Номер по умолчанию для тестовых звонков для проверки сети
     private var voxActivation = 500L
@@ -174,7 +190,7 @@ class MainRepositoryImpl(
     private var smsNavigationIndex: Int = -1 // -1 означает, что навигация не активна, 0 — самое новое SMS.
     private var totalSmsCount: Int = 0      // Общее количество SMS, для проверки границ.
     private var prefix = ""
-    
+
     // Локальный список предложений помощи (команды репитера)
     private fun getHelpSentences(): List<String> {
         return listOf(
@@ -230,9 +246,9 @@ class MainRepositoryImpl(
     init {
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
 
-        if (notificationManager.isNotificationPolicyAccessGranted()) {
+        // 1. Управляем режимом "Не беспокоить" только если право уже дано в Activity
+        if (notificationManager.isNotificationPolicyAccessGranted) {
             if (notificationManager.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL) {
                 try {
                     notificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL)
@@ -240,22 +256,9 @@ class MainRepositoryImpl(
                     e.printStackTrace()
                 }
             }
-        } else {
-            val intent = Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            }
-            context.startActivity(intent)
         }
 
-        if (!powerManager.isIgnoringBatteryOptimizations(context.packageName)) { // Проверка на оптимизацию
-            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                data = Uri.parse("package:${context.packageName}")
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            }
-            context.startActivity(intent)
-        }
-
-        // Устанавливаем громкость для каждого потока отдельно
+        // 2. Устанавливаем громкость (это работает всегда, если есть MODIFY_AUDIO_SETTINGS)
         val volumeSettings = mapOf(
             AudioManager.STREAM_RING to 0.7,
             AudioManager.STREAM_MUSIC to 0.9,
@@ -267,19 +270,37 @@ class MainRepositoryImpl(
         )
 
         volumeSettings.forEach { (stream, volumeFraction) ->
-            audioManager.setStreamVolume(
-                stream,
-                (audioManager.getStreamMaxVolume(stream) * volumeFraction).toInt(),
-                0
-            )
+            val maxVol = audioManager.getStreamMaxVolume(stream)
+            audioManager.setStreamVolume(stream, (maxVol * volumeFraction).toInt(), 0)
         }
 
-        // --- ДОБАВЛЕНО: ЗАГРУЗКА СОХРАНЕННЫХ НОМЕРОВ БЫСТРОГО НАБОРА ---
+        // 3. Загружаем номера быстрого набора
         numberA = loadQuickDialNumber(context, keyA)
         numberB = loadQuickDialNumber(context, keyB)
         numberC = loadQuickDialNumber(context, keyC)
         numberD = loadQuickDialNumber(context, keyD)
-        // -----------------------------------------------------------------
+
+        // 4. Настройка TTS
+        textToSpeech.language = Locale.getDefault()
+        textToSpeech.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) {
+                isSpeaking = true
+            }
+
+            override fun onDone(utteranceId: String?) {
+                isSpeaking = false
+                if (getCallState() == 7) {
+                    utils.stopPlayback()
+                }
+            }
+
+            @Deprecated("Deprecated in Java")
+            override fun onError(utteranceId: String?) {
+                isSpeaking = false
+                utils.stopPlayback()
+            }
+        })
+        isTtsInitialized = true
     }
 
     private fun setVolumeTts(level: Int) {
@@ -587,6 +608,50 @@ class MainRepositoryImpl(
             speakText("Питание устройства возобновлено. Аккумулятор смартфона заряжается")
         }
         _powerState.update { value }
+    }
+
+    override fun getHeadsetFlow(): Flow<Boolean> = flow {
+        if (_headsetState.value == null) {
+            getHeadset() // Инициализируем значение, если пусто
+        }
+        emitAll(_headsetState.filterNotNull())
+    }
+
+    override fun getHeadset(): Boolean {
+        if (_headsetState.value == null) {
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            _headsetState.value = audioManager.isWiredHeadsetOn
+        }
+        return _headsetState.value ?: false
+    }
+
+    override fun setHeadset(value: Boolean) {
+        val previousValue = _headsetState.value
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val hasDndAccess = notificationManager.isNotificationPolicyAccessGranted
+
+        // Переход: наушники ОТКЛЮЧЕНЫ
+        if (previousValue == true && !value) {
+            speakText("Соедините смартфон и радиостанцию")
+
+            // Возвращаем обычный режим только если есть доступ
+            if (hasDndAccess) {
+                audioManager.ringerMode = AudioManager.RINGER_MODE_NORMAL
+            }
+        }
+
+        // Переход: наушники ПОДКЛЮЧЕНЫ
+        if (previousValue == false && value) {
+            speakText("Соединение смартфона и радиостанции произведено успешно")
+
+            // Включаем тишину только если есть доступ
+            if (hasDndAccess) {
+                audioManager.ringerMode = AudioManager.RINGER_MODE_SILENT
+            }
+        }
+
+        _headsetState.update { value }
     }
 
     // Значение клавиш гарнитуры 79(центральная),25(вверх),24(вниз)
@@ -928,34 +993,60 @@ class MainRepositoryImpl(
     @SuppressLint("MissingPermission")
     override suspend fun record() {
         val bufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
-        audioRecord = AudioRecord(
+
+        // Создаем объект
+        val audio = AudioRecord(
             MediaRecorder.AudioSource.MIC,
             sampleRate,
             channelConfig,
             audioFormat,
             bufferSize
-        ).also { audio ->
-            runCatching {
-                val buffer = ShortArray(blockSize)
-                audio.startRecording()
-                coroutineScope {
-                    var previousAmplitudeCheck = false // Предыдущее состояние флага
-                    while (isActive) {
-                        val bufferReadSize = audio.read(buffer, 0, blockSize)
-                        val dataBlock = DataBlock(buffer, blockSize, bufferReadSize)
-                        blockingQueue.put(dataBlock)
-                        val amplitude = calculateAmplitude(buffer, bufferReadSize)
-                        setOutputAmplitude(amplitude.toFloat())
+        )
 
-                        val currentAmplitudeCheck = amplitude > 0
-                        if (currentAmplitudeCheck != previousAmplitudeCheck) {
-                            setAmplitudeCheck(currentAmplitudeCheck)
-                            previousAmplitudeCheck = currentAmplitudeCheck
-                        }
+        // 1. ПРОВЕРКА: Инициализировался ли микрофон системой?
+        if (audio.state != AudioRecord.STATE_INITIALIZED) {
+            Log.e("Контрольный лог", "AudioRecord не смог инициализироваться. Код ошибки -22.")
+            audio.release() // Освобождаем ресурсы
+            return // Выходим из функции, чтобы не было падения
+        }
+
+        audioRecord = audio // Присваиваем только если всё ок
+
+        runCatching {
+            val buffer = ShortArray(blockSize)
+            audio.startRecording()
+
+            coroutineScope {
+                var previousAmplitudeCheck = false
+                while (isActive) {
+                    val bufferReadSize = audio.read(buffer, 0, blockSize)
+                    if (bufferReadSize <= 0) continue // Пропускаем ошибки чтения
+
+                    val dataBlock = DataBlock(buffer, blockSize, bufferReadSize)
+                    blockingQueue.put(dataBlock)
+
+                    val amplitude = calculateAmplitude(buffer, bufferReadSize)
+                    setOutputAmplitude(amplitude.toFloat())
+
+                    val currentAmplitudeCheck = amplitude > 0
+                    if (currentAmplitudeCheck != previousAmplitudeCheck) {
+                        setAmplitudeCheck(currentAmplitudeCheck)
+                        previousAmplitudeCheck = currentAmplitudeCheck
                     }
                 }
             }
-            audio.stop()
+        }.onFailure { e ->
+            Log.e("Контрольный лог", "Ошибка в процессе записи: ${e.message}")
+        }
+
+        // 2. БЕЗОПАСНАЯ ОСТАНОВКА
+        if (audio.state == AudioRecord.STATE_INITIALIZED) {
+            try {
+                audio.stop()
+                audio.release()
+            } catch (e: Exception) {
+                Log.e("Контрольный лог", "Не удалось остановить AudioRecord: ${e.message}")
+            }
         }
     }
 
@@ -986,6 +1077,62 @@ class MainRepositoryImpl(
 
     //Основной блок обработки нажатий клавиш
     override fun clickKey(input: String, key: Char?) {
+
+        // Блок выбора с какой сим карты будет отправлено смс
+        // --- БЛОК ВЫБОРА SIM (только если карт больше одной) ---
+        // --- БЛОК ВЫБОРА SIM (только если карт больше одной) ---
+        if (isWaitingForSimChoice) {
+            when (key) {
+                '1', '2' -> {
+                    val slotIndex = if (key == '1') 0 else 1
+
+                    // Используем системный сервис для проверки подписок
+                    val subManager = context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as SubscriptionManager
+
+                    // ПРАВКА: Добавили android. перед Manifest и PackageManager
+                    val activeCount = if (androidx.core.app.ActivityCompat.checkSelfPermission(context, android.Manifest.permission.READ_PHONE_STATE) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                        subManager.activeSubscriptionInfoList?.size ?: 0
+                    } else 0
+
+                    if (slotIndex >= activeCount) {
+                        speakText("Выбрана пустая ячейка. В телефоне только одна активная сим карта. Нажмите один или решетку для отмены")
+                        setInput("")
+                        return
+                    }
+
+                    isWaitingForSimChoice = false
+                    setInput("")
+                    scope.launch {
+                        val phoneNumber = getInput1() ?: ""
+                        // Ваша функция отправки через реальный ID
+                        val isSent = utils.sendSmsBySlot(context, phoneNumber, pendingSmsText, slotIndex)
+                        if (isSent) {
+                            val numberText = utils.numberToText(phoneNumber)
+                            speakText("Отправлено с сим карты $key на номер $numberText")
+                        } else {
+                            speakText("Ошибка модема")
+                        }
+                        pendingSmsText = ""
+                        setInput1("")
+                    }
+                }
+                '#' -> {
+                    // ОТМЕНА ПО РЕШЕТКЕ
+                    isWaitingForSimChoice = false
+                    pendingSmsText = ""
+                    setInput("")
+                    speakText("Отправка сообщения отменена")
+                }
+                else -> {
+                    // ЛЮБАЯ ДРУГАЯ КНОПКА ПРИ ОЖИДАНИИ (3, 4, 5, *, A, B и т.д.)
+                    if (key != null && key != ' ') {
+                        speakText("Неверный выбор. Нажмите один, два или решетку для отмены")
+                        setInput("")
+                    }
+                }
+            }
+            return // Прерываем clickKey, чтобы кнопки не сработали как другие команды
+        }
 
         if (key == ' ') {
             if (isTorchOn) {
@@ -1313,7 +1460,7 @@ class MainRepositoryImpl(
                             withContext(Dispatchers.Main) {
                                 stopDtmf()
                                 utils.startSpeechRecognition(context) { result ->
-                                   startDtmf()
+                                    startDtmfInternal() // Включаем микрофон обратно
                                     setInput1("")
                                     if (result != null) {
                                         utils.getNameContact(result, context)
@@ -1819,47 +1966,57 @@ class MainRepositoryImpl(
 
 
                 // Отправка надиктованного сообщения на набранный номер
-                else if ((key == '4' && getCall() == null) && !getIsRecording()) { // Блокируем команду если идет запись голосовой заметки
-                    playSoundJob.launch {
+                else if ((key == '4' && getCall() == null) && !getIsRecording()) {
+                    setInput("")
+                    scope.launch {
                         if (utils.isOnline(context)) {
-                            speakText("Произнесите сообщение, которое вы хотите отправить на этот номер")
-                            setInput("")
+                            speakText("Произнесите сообщение которое вы хотите отправить на этот номер")
                             delay(10000)
+
                             withContext(Dispatchers.Main) {
                                 stopDtmf()
                                 utils.startSpeechRecognition(context) { result ->
-                                    startDtmf()
-                                    if (result != null) {
-                                        if (result.length > 70) {
-                                            speakText("Сообщение слишком длинное")
-                                            setInput1("")
-                                        } else {
-                                            val phoneNumber = getInput1()
-                                            setInput1("")
-                                            if (phoneNumber?.length == 11) {
-                                                val isSent = utils.sendSms(context, phoneNumber, result)
-                                                if (isSent) {
-                                                    val number = utils.numberToText(phoneNumber)
-                                                    speakText("Сообщение \"$result\" успешно отправлено на номер $number ")
-                                                    setInput1("")
-                                                } else {
-                                                    speakText("Не удалось отправить сообщение")
+                                    startDtmfInternal()
+                                    if (!result.isNullOrBlank()) {
+                                        val phoneNumber = getInput1() ?: ""
+
+                                        // Проверяем количество SIM-карт
+                                        val subManager = context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as SubscriptionManager
+                                        val activeList = if (ActivityCompat.checkSelfPermission(context, android.Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
+                                            subManager.activeSubscriptionInfoList
+                                        } else null
+
+                                        when {
+                                            activeList.isNullOrEmpty() -> {
+                                                speakText("Ошибка. Сим карты не обнаружены")
+                                                setInput1("")
+                                            }
+
+                                            activeList.size == 1 -> {
+                                                // Озвучиваем текст перед автоматической отправкой
+                                                speakText("Вы произнесли: $result. Отправляю.")
+                                                scope.launch {
+                                                    val isSent = utils.sendSmsBySlot(context, phoneNumber, result, 0)
+                                                    if (!isSent) speakText("Ошибка модема")
                                                     setInput1("")
                                                 }
-                                            } else {
-                                                speakText("Номер телефона должен содержать 11 цифр")
-                                                setInput1("")
+                                            }
+
+                                            else -> {
+                                                // Сохраняем и озвучиваем текст для подтверждения выбора SIM
+                                                pendingSmsText = result
+                                                isWaitingForSimChoice = true
+
+                                                // Добавляем произнесение самого текста в подсказку
+                                                speakText("Вы произнесли: $result. Выберите сим карту: с которой надо выполнить отправку этого сообщения. Для отмены нажмите решетку.")
                                             }
                                         }
                                     } else {
-                                        speakText("Не удалось распознать сказанное. Попробуйте еще раз")
+                                        speakText("Не удалось распознать текст")
                                         setInput1("")
                                     }
                                 }
                             }
-                        } else {
-                            speakText("Отсутствует интернет. Отправка сообщения не возможна")
-                            setInput("")
                         }
                     }
                     return
@@ -1875,7 +2032,7 @@ class MainRepositoryImpl(
                             withContext(Dispatchers.Main) {
                                     stopDtmf()
                                 utils.startSpeechRecognition(context) { result ->
-                                    startDtmf()
+                                    startDtmfInternal() // Включаем микрофон обратно
                                     if (result != null) {
                                         if (result.length > 25) {
                                             speakText("Слишком длинное имя контакта")
@@ -2065,7 +2222,7 @@ class MainRepositoryImpl(
                                 withContext(Dispatchers.Main) {
                                     stopDtmf()
                                     utils.startSpeechRecognition(context) { result ->
-                                        startDtmf()
+                                        startDtmfInternal() // Включаем микрофон обратно
                                         if (result != null) {
                                             val isDeleted = utils.deleteContactByName(result, context)
                                             if (isDeleted) {
@@ -2091,7 +2248,7 @@ class MainRepositoryImpl(
 
                     // Очистка номеров быстрого набора по команде 6*
                     else if (input == "6" && getCall() == null) {
-                        speakText("Команда не назначена")
+                        utils.deleteAllSms(context)
                         setInput("")
                     }
 
@@ -2312,18 +2469,6 @@ class MainRepositoryImpl(
         }
     }
 
-    // Запуск дтмф анализа
-//    override fun startDtmf() {
-//        setStatusDtmf(true)
-//        DtmfService.start(context)
-//        initJob()
-//        setInput("")
-//        recorderJob.launch { record() }
-//        recognizerJob.launch { recognize() }
-//        if (getMagneticFieldFlag()) { setTimer(30000) }
-//    }
-
-
     // 1. Этот метод вызывается из Активити
     override fun startDtmf() {
         DtmfService.start(context) // Просто «пинаем» сервис
@@ -2364,6 +2509,25 @@ class MainRepositoryImpl(
         DtmfService.stop(context)
         if (getMagneticFieldFlag()) { setTimer(0) }
         setInput("")
+    }
+
+    override fun handleIncomingSms(context: Context) {
+        // Делаем небольшую паузу (буквально 300-500мс),
+        // так как мы только что сами вставили запись в базу в SmsReceiver
+        Handler(Looper.getMainLooper()).postDelayed({
+
+            // Используем твою готовую функцию, берем самый свежий индекс (0)
+            val (smsText, count) = utils.getIncomingSmsByIndex(context, 0)
+
+            if (count > 0) {
+                // smsText уже содержит "Сообщение номер 1 из... от... получено... Содержание..."
+                speakText("Внимание! $smsText")
+            } else {
+                // Если вдруг база вернула 0, хотя ресивер сработал
+                speakText("Ошибка чтения базы данных сообщений")
+            }
+
+        }, 500)
     }
 
     // Функция мониторинга возможности выполнить вызов для нахождения точки установки репитера
@@ -2577,47 +2741,37 @@ class MainRepositoryImpl(
     }
 
     override fun speakText(text: String) {
+        Log.d("Контрольный лог", "ЗНАЧЕНИЕ: $text.")
+        // 1. Воспроизводим CTCSS тон (если нужно)
+        if (getFrequencyCtcss() != 0.0) {
+            utils.playCTCSS(
+                getFrequencyCtcss(),
+                getVolumeLevelCtcss(),
+                getPeriodCtcss(),
+                getDurationCtcss()
+            )
+        }
 
-        // Воспроизводим соответствующий CTCSS (если значение = 0.0 то тон не воспроизводится)
-        if (getFrequencyCtcss() != 0.0) { utils.playCTCSS(getFrequencyCtcss(), getVolumeLevelCtcss(), getPeriodCtcss(),
-            getDurationCtcss()) }
+        // 2. Если TTS еще не готов, выходим во избежание ошибок
+        if (!isTtsInitialized) return
 
-        if (isSpeaking) { return }
+        // 3. Формируем уникальный ID для текущей фразы
+        val utteranceId = System.currentTimeMillis().toString()
 
-        textToSpeech = TextToSpeech(context.applicationContext) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                textToSpeech.language = Locale.getDefault()
-            }
-
-            isSpeaking = true
-
-            textToSpeech.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onStart(utteranceId: String?) {}
-
-                override fun onDone(utteranceId: String?) {
-                    isSpeaking = false
-                    textToSpeech.setOnUtteranceProgressListener(null)
-                    textToSpeech.stop()
-                    textToSpeech.shutdown()
-                    if (getCallState() == 7) {
-                        utils.stopPlayback()
+        // Используем QUEUE_FLUSH, чтобы новая фраза мгновенно прерывала старую и очищала очередь
+        CoroutineScope(Dispatchers.Main).launch {
+            when {
+                text == "Наберите номер" -> {
+                    utils.voxActivation(0, voxActivation) {
+                        textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
                     }
                 }
-
-                @Deprecated("This method overrides a deprecated member", ReplaceWith("..."))
-                override fun onError(utteranceId: String?) {
-                    utils.stopPlayback()
+                text != "Один. Два. Три. Четыре. Пять. Поверка работоспособности вокс системы. Шесть. Семь. Восемь. Девять. Десять" -> {
+                    utils.voxActivation(1500, voxActivation) {
+                        textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+                    }
                 }
-            })
-
-            val utteranceId = System.currentTimeMillis().toString()
-
-            CoroutineScope(Dispatchers.Main).launch {
-                if (text == "Наберите номер") {
-                utils.voxActivation(0, voxActivation) { textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId) }
-                } else if (text != "Один. Два. Три. Четыре. Пять. Поверка работоспособности вокс системы. Шесть. Семь. Восемь. Девять. Десять") {
-                    utils.voxActivation(1500, voxActivation) { textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId) }
-                }  else {
+                else -> {
                     delay(1500)
                     textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
                 }

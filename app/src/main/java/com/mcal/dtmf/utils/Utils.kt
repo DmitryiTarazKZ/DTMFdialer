@@ -22,6 +22,8 @@ import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.StatFs
 import android.provider.CallLog
 import android.provider.Telephony
@@ -37,8 +39,10 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.mcal.dtmf.data.repositories.main.MainRepository
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.BufferedReader
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -52,6 +56,8 @@ import java.util.Locale
 import java.util.Timer
 import java.util.TimerTask
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 import kotlin.math.PI
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -955,15 +961,52 @@ class Utils(
     }
 
     // Функция для отправки надиктованного сообщения СМС по команде 4 после набора номера
-    fun sendSms(context: Context, phoneNumber: String, message: String): Boolean {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
-            return false
-        }
+    fun sendSmsBySlot(context: Context, phoneNumber: String, message: String, slotIndex: Int): Boolean {
         return try {
-            val smsManager = SmsManager.getDefault()
-            smsManager.sendTextMessage(phoneNumber, null, message, null, null)
+            val subManager = context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as SubscriptionManager
+            if (ActivityCompat.checkSelfPermission(context, android.Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) return false
+
+            val activeList = subManager.activeSubscriptionInfoList
+            if (activeList.isNullOrEmpty() || slotIndex >= activeList.size) return false
+
+            // 1. Берем РЕАЛЬНЫЙ ID симки
+            val realSubId = activeList[slotIndex].subscriptionId
+
+            // 2. Получаем SmsManager СТРОГО через createForSubscriptionId
+            val smsManager: SmsManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val systemSmsManager = context.getSystemService(SmsManager::class.java)
+                systemSmsManager.createForSubscriptionId(realSubId)
+            } else {
+                @Suppress("DEPRECATION")
+                SmsManager.getSmsManagerForSubscriptionId(realSubId)
+            }
+
+            var cleanNumber = phoneNumber.replace(Regex("[^0-9]"), "")
+            if (cleanNumber.startsWith("8")) cleanNumber = "+7" + cleanNumber.substring(1)
+
+            // 3. ФИЗИЧЕСКАЯ ОТПРАВКА
+            val parts = smsManager.divideMessage(message)
+            smsManager.sendMultipartTextMessage(cleanNumber, null, parts, null, null)
+
+            // 4. ЗАПИСЬ В БАЗУ СО ЗНАЧКОМ СИМКИ (sub_id)
+            try {
+                val values = ContentValues().apply {
+                    put("address", cleanNumber)
+                    put("body", message)
+                    put("date", System.currentTimeMillis())
+                    put("type", 2) // 2 = SENT
+                    put("sub_id", realSubId) // ВОТ ОНО! Это добавит значок SIM в приложении
+                    put("error_code", 0)
+                }
+                context.contentResolver.insert(Uri.parse("content://sms/sent"), values)
+            } catch (e: Exception) {
+                android.util.Log.d("Контрольный лог", "Ошибка записи базы: ${e.message}")
+            }
+
+            android.util.Log.d("Контрольный лог", "ОТПРАВЛЕНО (SubID: $realSubId). Проверьте значок SIM в SMS-приложении.")
             true
         } catch (e: Exception) {
+            android.util.Log.d("Контрольный лог", "Сбой: ${e.message}")
             false
         }
     }
@@ -1062,104 +1105,84 @@ class Utils(
         return convertedWords.joinToString(" ")
     }
 
-    // Озвучивание уровня сотовой сети по SIM-картам (команда 3*)
+    // Уровни сигнала сим карт по команде 3*
     fun speakSimSignalLevels(context: Context) {
-        val hasPerm = ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.READ_PHONE_STATE
-        ) == PackageManager.PERMISSION_GRANTED
-
+        val hasPerm = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
         if (!hasPerm) {
             mainRepository.speakText("Не получено разрешение на доступ к уровню сигнала сотовой сети")
             mainRepository.setInput("")
             return
         }
-
         val subMgr = context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as SubscriptionManager
         val telMgr = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
         val subs = subMgr.activeSubscriptionInfoList
-
-        if (subs == null || subs.isEmpty()) {
+        if (subs.isNullOrEmpty()) {
             mainRepository.speakText("В устройстве нет ни одной действующей сим карты")
             mainRepository.setInput("")
             return
         }
-
         fun mapOperator(name: String?): String {
-            return when (name) {
-                "ACTIV" -> "Актив"
-                "ALTEL" -> "Алтэл"
-                "MTS" -> "МТС"
-                "Beeline KZ", "Beeline" -> "Билайн"
-                "Megafon" -> "Мегафон"
-                "Tele2" -> "Теле 2"
+            val n = name?.uppercase() ?: ""
+            return when {
+                n.contains("ACTIV") -> "Актив"
+                n.contains("ALTEL") -> "Алтэл"
+                n.contains("MTS") || n.contains("МТС") -> "МТС"
+                n.contains("BEELINE") -> "Билайн"
+                n.contains("MEGAFON") || n.contains("МЕГАФОН") -> "Мегафон"
+                n.contains("TELE2") -> "Теле 2"
                 else -> name ?: "Нет сигнала"
             }
         }
-
         fun levelToWord(level: Int?): String {
             return when (level) {
-                null -> "неизвестен"
                 1 -> "слабый"
                 2 -> "средний"
                 3 -> "хороший"
-                else -> "отличный"
+                4 -> "отличный"
+                else -> "неизвестен"
             }
         }
-
         var firstMsg = ""
         var secondMsg = ""
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             subs.forEach { s ->
                 val tm = telMgr.createForSubscriptionId(s.subscriptionId)
                 val strength = try { tm.signalStrength } catch (_: Exception) { null }
                 val level = try { strength?.level } catch (_: Exception) { null }
                 val op = mapOperator(s.carrierName?.toString())
-                val part = if (strength == null || level == null || level <= 0) {
-                    "сигнал отсутствует"
-                } else {
-                    "уровень ${levelToWord(level)}"
-                }
-                if (s.simSlotIndex == 0) {
-                    firstMsg = "первая сим карта, оператор $op, $part"
-                } else if (s.simSlotIndex == 1) {
-                    secondMsg = "вторая сим карта, оператор $op, $part"
-                }
+                val part = if (level == null || level <= 0) "сигнал отсутствует" else "уровень ${levelToWord(level)}"
+                if (s.simSlotIndex == 0) firstMsg = "первая сим карта, оператор $op, $part"
+                else if (s.simSlotIndex == 1) secondMsg = "вторая сим карта, оператор $op, $part"
             }
         } else {
             val cells = try { telMgr.allCellInfo } catch (_: Exception) { null }
             var bestLevelRaw = Int.MIN_VALUE
             cells?.forEach { cell ->
                 try {
-                    when (cell) {
-                        is android.telephony.CellInfoGsm -> bestLevelRaw = kotlin.math.max(bestLevelRaw, cell.cellSignalStrength.level)
-                        is android.telephony.CellInfoLte -> bestLevelRaw = kotlin.math.max(bestLevelRaw, cell.cellSignalStrength.level)
-                        is android.telephony.CellInfoWcdma -> bestLevelRaw = kotlin.math.max(bestLevelRaw, cell.cellSignalStrength.level)
-                        is android.telephony.CellInfoCdma -> bestLevelRaw = kotlin.math.max(bestLevelRaw, cell.cellSignalStrength.level)
-                        else -> {}
+                    val level = when (cell) {
+                        is android.telephony.CellInfoGsm -> cell.cellSignalStrength.level
+                        is android.telephony.CellInfoLte -> cell.cellSignalStrength.level
+                        is android.telephony.CellInfoWcdma -> cell.cellSignalStrength.level
+                        is android.telephony.CellInfoCdma -> cell.cellSignalStrength.level
+                        else -> Int.MIN_VALUE
                     }
+                    if (level != Int.MIN_VALUE) bestLevelRaw = kotlin.math.max(bestLevelRaw, level)
                 } catch (_: Exception) {}
             }
             val bestLevel: Int? = if (bestLevelRaw == Int.MIN_VALUE) null else bestLevelRaw
             subs.forEach { s ->
                 val op = mapOperator(s.carrierName?.toString())
                 val part = if (bestLevel == null || bestLevel <= 0) "сигнал отсутствует" else "уровень ${levelToWord(bestLevel)}"
-                if (s.simSlotIndex == 0) {
-                    firstMsg = "первая сим карта, оператор $op, $part"
-                } else if (s.simSlotIndex == 1) {
-                    secondMsg = "вторая сим карта, оператор $op, $part"
-                }
+                if (s.simSlotIndex == 0) firstMsg = "первая сим карта, оператор $op, $part"
+                else if (s.simSlotIndex == 1) secondMsg = "вторая сим карта, оператор $op, $part"
             }
         }
-
         val message = when {
-            firstMsg.isNotEmpty() && secondMsg.isNotEmpty() -> "Уровни сотовой сети: $firstMsg, $secondMsg"
-            firstMsg.isNotEmpty() -> "Уровни сотовой сети: $firstMsg"
-            secondMsg.isNotEmpty() -> "Уровни сотовой сети: $secondMsg"
+            firstMsg.isNotEmpty() && secondMsg.isNotEmpty() -> "Уровни сотовой сети: $firstMsg. $secondMsg"
+            firstMsg.isNotEmpty() -> "Уровень сотовой сети: $firstMsg"
+            secondMsg.isNotEmpty() -> "Уровень сотовой сети: $secondMsg"
             else -> "Нет данных по уровню сигнала"
         }
-
         mainRepository.speakText(message)
         mainRepository.setInput("")
     }

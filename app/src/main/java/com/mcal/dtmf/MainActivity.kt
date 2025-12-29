@@ -1,21 +1,17 @@
 package com.mcal.dtmf
 
 import android.Manifest
+import android.app.NotificationManager
 import android.app.role.RoleManager
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.media.AudioManager
-import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Telephony
 import android.telecom.TelecomManager
 import android.view.KeyEvent
-import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
@@ -28,117 +24,21 @@ import androidx.core.content.ContextCompat
 import cafe.adriel.voyager.navigator.Navigator
 import cafe.adriel.voyager.transitions.SlideTransition
 import com.mcal.dtmf.data.repositories.main.MainRepository
-import com.mcal.dtmf.receiver.BootReceiver
 import com.mcal.dtmf.service.DtmfService
 import com.mcal.dtmf.ui.main.MainScreen
 import com.mcal.dtmf.ui.theme.VoyagerDialogTheme
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import org.koin.android.ext.android.inject
+import android.provider.Settings
+import android.net.Uri
+import android.util.Log
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import org.koin.android.ext.android.inject
 
 class MainActivity : ComponentActivity() {
     private val mainRepository: MainRepository by inject()
     private val permissionCode = 100
-
-    private val powerReceiver: BroadcastReceiver = object : BootReceiver() {
-        override fun onReceive(context: Context, intent: Intent?) {
-            intent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1)?.let { chargePlug ->
-                val usbCharge = chargePlug == BatteryManager.BATTERY_PLUGGED_USB
-                val acCharge = chargePlug == BatteryManager.BATTERY_PLUGGED_AC
-                val wirelessCharge = chargePlug == BatteryManager.BATTERY_PLUGGED_WIRELESS
-                val currentlyCharging =  acCharge || wirelessCharge || usbCharge
-                mainRepository.setPower(currentlyCharging)
-            }
-        }
-    }
-
-    private val headphoneReceiver: BroadcastReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent?) {
-            if (intent?.action == Intent.ACTION_HEADSET_PLUG) {
-                val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-                audioManager.ringerMode = if (intent.getIntExtra("state", 0) == 1) {
-                mainRepository.speakText("Соеденение смартфона и радиостанции произведено успешно")
-                AudioManager.RINGER_MODE_SILENT
-                } else {
-                mainRepository.speakText("Соедените смартфон и радиостанцию")
-                AudioManager.RINGER_MODE_NORMAL }
-            }
-        }
-    }
-
-
-    // БОРЬБА ЗА ЖИВУЧЕСТЬ ПРИЛОЖЕНИЯ. в параметрах разработчика включить не отключать экран при зарядке
-//    private val screenStateReceiver: BroadcastReceiver = object : BroadcastReceiver() {
-//        override fun onReceive(context: Context, intent: Intent) {
-//            when (intent.action) {
-//                Intent.ACTION_SCREEN_OFF -> {
-//                    mainRepository.speakText("Внимание! Приложение потеряло фокус, или произошло отключение экрана по системному таймауту")
-//
-//                    // Запускаем пробуждение через время
-//                    CoroutineScope(Dispatchers.Main).launch {
-//                        delay(10000)
-//                        val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-//                        val wl = pm.newWakeLock(
-//                            PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
-//                                    PowerManager.ACQUIRE_CAUSES_WAKEUP or
-//                                    PowerManager.ON_AFTER_RELEASE,
-//                            "DTMFApp::RepeaterWakeup"
-//                        )
-//                        wl.acquire(5000) // Включаем на 5 секунд дальше подхватит FLAG_KEEP_SCREEN_ON
-//                        if (wl.isHeld) wl.release()
-//                    }
-//                }
-//
-//                Intent.ACTION_SCREEN_ON -> {
-//                    // 1. Сразу останавливаем (без корутины)
-//                    mainRepository.stopDtmf()
-//
-//                    // 2. Автоматический вывод приложения на передний план
-//                    val intentToApp = Intent(context, MainActivity::class.java).apply {
-//                        // Эти флаги нужны, чтобы запустить Activity из фонового процесса (ресивера)
-//                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-//                        addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT) // Если приложение открыто, просто выведет его наверх
-//                    }
-//                    context.startActivity(intentToApp)
-//
-//                    mainRepository.speakText("Экран включен. Приложение возвращено на передний план.")
-//
-//                    // 3. А запуск микрофона делаем через паузу в корутине
-//                    CoroutineScope(Dispatchers.Main).launch {
-//                        delay(1000)
-//                        mainRepository.startDtmf()
-//                    }
-//                }
-//            }
-//        }
-//    }
-
-    // Ресивер для автоматического озвучивания входящих SMS
-
-    private val smsReceiver: BroadcastReceiver = object : BroadcastReceiver() {
-
-        override fun onReceive(context: Context, intent: Intent) {
-
-            if (intent.action == Telephony.Sms.Intents.SMS_RECEIVED_ACTION) {
-
-                val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
-
-                if (messages != null && messages.isNotEmpty()) {
-                    val sender = messages[0].displayOriginatingAddress
-                    val fullMessageBody = StringBuilder()
-                    for (sms in messages) {
-                        fullMessageBody.append(sms.displayMessageBody)
-                    }
-                    val rawText = fullMessageBody.toString()
-                    mainRepository.speakText("Внимание у вас входящее сообщение от $sender: $rawText")
-                } else {
-                    mainRepository.speakText("Пустое входящее сообщение")
-                }
-            }
-        }
-    }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
         // Return выносится вперед, и весь блок when возвращает результат
@@ -148,6 +48,25 @@ class MainActivity : ComponentActivity() {
                 true // возвращаемое значение для этого случая
             }
             else -> super.onKeyUp(keyCode, event)
+        }
+    }
+
+    private fun debugSmsComponents() {
+        val packageManager = packageManager
+        val intent = Intent(Telephony.Sms.Intents.SMS_DELIVER_ACTION)
+        // Получаем список всех ресиверов в системе, которые могут принять СМС
+        val resolveInfoList = packageManager.queryBroadcastReceivers(intent, 0)
+
+        var found = false
+        for (resolveInfo in resolveInfoList) {
+            if (resolveInfo.activityInfo.packageName == packageName) {
+                Log.d("Контрольный лог", "УРА! Система видит твой SmsReceiver: ${resolveInfo.activityInfo.name}")
+                found = true
+            }
+        }
+
+        if (!found) {
+            Log.e("Контрольный лог", "ПЛОХО: Система НЕ ВИДИТ твой SmsReceiver. Проверь Манифест еще раз.")
         }
     }
 
@@ -165,16 +84,41 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // 1. Сначала базовые разрешения (Микрофон, Контакты и т.д.)
         checkPermissions()
-        offerReplacingDefaultDialer()
 
+        // 2. Очередь системных окон (идут строго друг за другом)
+        lifecycleScope.launch {
+            try {
+                // Оптимизация батареи
+                offerIgnoringBatteryOptimizations()
+                waitForWindow()
+
+                // Звонилка по умолчанию
+                offerReplacingDefaultDialer()
+                waitForWindow()
+
+                // СМС по умолчанию (самое важное для удаления)
+                offerReplacingDefaultSmsApp()
+                waitForWindow()
+
+                // Доступ к "Не беспокоить"
+                offerNotificationPolicyAccess()
+                waitForWindow()
+
+                android.util.Log.d("Контрольный лог", "Все проверки завершены. Запуск сервиса.")
+                DtmfService.start(this@MainActivity)
+
+            } catch (e: Exception) {
+                android.util.Log.e("Контрольный лог", "Ошибка в очереди: ${e.message}")
+            }
+        }
+
+        // 3. Интерфейс (Voyager + Compose)
         setContent {
             VoyagerDialogTheme {
                 MaterialTheme {
-                    Surface(
-                        modifier = Modifier.fillMaxSize(),
-                        tonalElevation = 0.dp,
-                    ) {
+                    Surface(modifier = Modifier.fillMaxSize()) {
                         Navigator(MainScreen()) { nav ->
                             SlideTransition(nav)
                         }
@@ -182,35 +126,24 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        registerReceivers()
-        // Вместо mainRepository.startDtmf()
-        // 1. Обычный старт сервиса
-        DtmfService.start(this)
-
-        // 2. ТЕСТ: Имитируем воскрешение системы через 5 секунд
-//        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-//            android.util.Log.d("Контрольный лог", "--- ОТПРАВКА ТЕСТОВОГО NULL-INTENT ---")
-//            val testIntent = Intent(this, DtmfService::class.java)
-//            startService(testIntent)
-//        }, 5000)
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
-    private fun registerReceivers() {
-        val filter = IntentFilter(Intent.ACTION_HEADSET_PLUG)
-        registerReceiver(headphoneReceiver, filter)
-        val intentFilter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-        intentFilter.addAction(Intent.ACTION_POWER_CONNECTED)
-        intentFilter.addAction(Intent.ACTION_POWER_DISCONNECTED)
-        registerReceiver(powerReceiver, intentFilter)
-//        val screenStateFilter = IntentFilter().apply {
-//            addAction(Intent.ACTION_SCREEN_OFF)
-//            addAction(Intent.ACTION_SCREEN_ON)
-//        }
-//        registerReceiver(screenStateReceiver, screenStateFilter)
-        val smsFilter = IntentFilter(Telephony.Sms.Intents.SMS_RECEIVED_ACTION)
-        registerReceiver(smsReceiver, smsFilter)
+    /**
+     * Ждет, пока пользователь закончит дела в системном окне и вернется в приложение.
+     */
+    private suspend fun waitForWindow() {
+        // 1. Даем небольшую паузу, чтобы системное окно успело открыться и перекрыть наше приложение
+        delay(1000)
+
+        // 2. Пока наше приложение находится в фоне (т.е. открыто чужое окно),
+        // цикл будет крутиться и "замораживать" выполнение кода.
+        while (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            delay(500) // Проверяем статус каждые полсекунды
+        }
+
+        // 3. Как только мы здесь — значит пользователь вернулся, идем к следующему пункту!
     }
+
     private fun offerReplacingDefaultDialer() {
         if (getSystemService(TelecomManager::class.java).defaultDialerPackage != packageName) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -221,6 +154,57 @@ class MainActivity : ComponentActivity() {
                 Intent(TelecomManager.ACTION_CHANGE_DEFAULT_DIALER)
                     .putExtra(TelecomManager.EXTRA_CHANGE_DEFAULT_DIALER_PACKAGE_NAME, packageName)
                     .let(::startActivity)
+            }
+        }
+    }
+
+    private fun offerReplacingDefaultSmsApp() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val roleManager = getSystemService(RoleManager::class.java)
+            if (roleManager != null && roleManager.isRoleAvailable(RoleManager.ROLE_SMS)) {
+                if (!roleManager.isRoleHeld(RoleManager.ROLE_SMS)) {
+                    val intent = roleManager.createRequestRoleIntent(RoleManager.ROLE_SMS)
+                    // Используем современный запуск
+                    startActivityForResult(intent, 2)
+                }
+            }
+        } else {
+            // Старый способ для древних Android
+            if (Telephony.Sms.getDefaultSmsPackage(this) != packageName) {
+                val intent = Intent(Telephony.Sms.Intents.ACTION_CHANGE_DEFAULT)
+                intent.putExtra(Telephony.Sms.Intents.EXTRA_PACKAGE_NAME, packageName)
+                startActivity(intent)
+            }
+        }
+    }
+
+    private fun offerIgnoringBatteryOptimizations() {
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        val packageName = packageName
+
+        // Проверяем, находится ли приложение уже в "белом списке"
+        if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = Uri.parse("package:$packageName")
+            }
+            try {
+                startActivity(intent)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    private fun offerNotificationPolicyAccess() {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        // Проверяем, есть ли доступ к управлению режимом DND
+        if (!nm.isNotificationPolicyAccessGranted) {
+            val intent = Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
+            try {
+                startActivity(intent)
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
     }
@@ -383,21 +367,5 @@ class MainActivity : ComponentActivity() {
                 permissionCode
             )
         }
-    }
-
-    override fun onResume() {
-        super.onResume()
-        // Принудительно подтверждаем, что экран не должен гаснуть
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        unregisterReceiver(headphoneReceiver)
-        unregisterReceiver(powerReceiver)
-//        unregisterReceiver(screenStateReceiver)
-        unregisterReceiver(smsReceiver)
-        mainRepository.stopDtmf()
-        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 }

@@ -68,6 +68,10 @@ interface MainRepository {
     fun getPower(): Boolean?
     fun setPower(value: Boolean)
 
+    fun getHeadsetFlow(): Flow<Boolean>
+    fun getHeadset(): Boolean?
+    fun setHeadset(value: Boolean)
+
     fun getMicKeyClickFlow(): Flow<Int>
     fun getMicKeyClick(): Int?
     fun setMicKeyClick(value: Int)
@@ -133,6 +137,7 @@ interface MainRepository {
     fun startDtmf()
 
     fun startDtmfInternal()
+    fun handleIncomingSms(context: Context)
 
     fun speakText(text: String)
 
