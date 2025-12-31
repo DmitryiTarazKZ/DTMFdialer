@@ -62,7 +62,5 @@ dependencies {
 
     implementation(libs.koin.android)
     implementation(libs.koin.androidx.compose)
-
-    debugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")
 }
 

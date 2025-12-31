@@ -1,28 +1,23 @@
 package com.mcal.dtmf.service
 
 import android.Manifest
-import android.app.AlarmManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.media.AudioManager
 import android.net.Uri
 import android.os.*
-import android.provider.Telephony
 import android.telecom.TelecomManager
 import android.telecom.VideoProfile
 import android.telephony.SubscriptionManager
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.mcal.dtmf.R
 import com.mcal.dtmf.data.repositories.main.MainRepository
+import com.mcal.dtmf.receiver.PulseReceiver
 import org.koin.android.ext.android.inject
 import org.koin.core.component.KoinComponent
 import java.text.SimpleDateFormat
@@ -48,29 +43,31 @@ class DtmfService : Service(), KoinComponent {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
 
-        // Пульс для выживания сервиса (каждые 30 минут)
-        if (action != ACTION_STOP) {
-            val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            val pulseIntent = PendingIntent.getService(this, 99,
-                Intent(this, DtmfService::class.java).apply { this.action = ACTION_PULSE },
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-            alarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + 1800000, pulseIntent)
-        }
+        // --- УДАЛЕНО: Больше не планируем пульс здесь через PendingIntent.getService ---
 
         when (action) {
-            ACTION_START -> updateNotification(StartType.USER)
-            null -> updateNotification(StartType.SYSTEM)
-            ACTION_PULSE -> updateNotification(StartType.PULSE)
-
+            ACTION_START -> {
+                // При первом запуске из Activity запускаем цепочку пульса в ресивере
+                PulseReceiver.scheduleNextPulse(this)
+                updateNotification(StartType.USER)
+            }
+            ACTION_PULSE -> {
+                updateNotification(StartType.PULSE)
+            }
+            null -> {
+                // Если система убила и восстановила сервис сама
+                updateNotification(StartType.SYSTEM)
+            }
             ACTION_CALL_START -> startCall()
             ACTION_CALL_ANSWER -> answerCall()
             ACTION_CALL_END -> endCall()
             ACTION_STOP -> stop()
         }
 
-        // Запускаем внутреннюю логику только при старте или восстановлении системой, но не при пульсе
-        if (action == ACTION_START || action == null) {
-            mainRepository.startDtmfInternal()
+        // Теперь разрешаем запуск логики и при пульсе тоже,
+        // чтобы репозиторий обнулял свои джобы (initJob) каждые 30 минут
+        if (action == ACTION_START || action == null || action == ACTION_PULSE) {
+            mainRepository.startDtmf()
         }
 
         return START_STICKY

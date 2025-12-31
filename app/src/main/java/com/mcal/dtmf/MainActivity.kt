@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import cafe.adriel.voyager.navigator.Navigator
@@ -30,7 +29,6 @@ import com.mcal.dtmf.ui.theme.VoyagerDialogTheme
 import org.koin.android.ext.android.inject
 import android.provider.Settings
 import android.net.Uri
-import android.util.Log
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.delay
@@ -48,25 +46,6 @@ class MainActivity : ComponentActivity() {
                 true // возвращаемое значение для этого случая
             }
             else -> super.onKeyUp(keyCode, event)
-        }
-    }
-
-    private fun debugSmsComponents() {
-        val packageManager = packageManager
-        val intent = Intent(Telephony.Sms.Intents.SMS_DELIVER_ACTION)
-        // Получаем список всех ресиверов в системе, которые могут принять СМС
-        val resolveInfoList = packageManager.queryBroadcastReceivers(intent, 0)
-
-        var found = false
-        for (resolveInfo in resolveInfoList) {
-            if (resolveInfo.activityInfo.packageName == packageName) {
-                Log.d("Контрольный лог", "УРА! Система видит твой SmsReceiver: ${resolveInfo.activityInfo.name}")
-                found = true
-            }
-        }
-
-        if (!found) {
-            Log.e("Контрольный лог", "ПЛОХО: Система НЕ ВИДИТ твой SmsReceiver. Проверь Манифест еще раз.")
         }
     }
 
@@ -105,12 +84,9 @@ class MainActivity : ComponentActivity() {
                 // Доступ к "Не беспокоить"
                 offerNotificationPolicyAccess()
                 waitForWindow()
-
-                android.util.Log.d("Контрольный лог", "Все проверки завершены. Запуск сервиса.")
                 DtmfService.start(this@MainActivity)
 
             } catch (e: Exception) {
-                android.util.Log.e("Контрольный лог", "Ошибка в очереди: ${e.message}")
             }
         }
 
@@ -128,20 +104,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * Ждет, пока пользователь закончит дела в системном окне и вернется в приложение.
-     */
     private suspend fun waitForWindow() {
-        // 1. Даем небольшую паузу, чтобы системное окно успело открыться и перекрыть наше приложение
         delay(1000)
-
-        // 2. Пока наше приложение находится в фоне (т.е. открыто чужое окно),
-        // цикл будет крутиться и "замораживать" выполнение кода.
         while (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
-            delay(500) // Проверяем статус каждые полсекунды
+            delay(500)
         }
-
-        // 3. Как только мы здесь — значит пользователь вернулся, идем к следующему пункту!
     }
 
     private fun offerReplacingDefaultDialer() {
@@ -367,5 +334,10 @@ class MainActivity : ComponentActivity() {
                 permissionCode
             )
         }
+    }
+
+    override fun onDestroy() {
+        mainRepository.stopDtmf()
+        super.onDestroy()
     }
 }

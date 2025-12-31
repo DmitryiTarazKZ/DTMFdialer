@@ -35,6 +35,7 @@ import com.mcal.dtmf.utils.Utils
 import com.mcal.dtmf.utils.Utils.Companion.batteryStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -61,14 +62,8 @@ class MainRepositoryImpl(
     ) : MainRepository {
     private var isTtsInitialized = false
     private var isSpeaking = false
-    // 1. Текст надиктованного сообщения (ждем, пока выберут SIM)
     private var pendingSmsText: String = ""
-
-    // 2. Флаг: находимся ли мы сейчас в режиме ожидания нажатия 1 или 2
     private var isWaitingForSimChoice: Boolean = false
-
-    // 3. (Опционально, но полезно) Время начала ожидания, чтобы потом сбросить режим по таймауту
-    private var simChoiceWaitStartTime: Long = 0L
     private var utils = Utils(this, CoroutineScope(Dispatchers.IO), context)
     private var job = SupervisorJob()
     private var scope = CoroutineScope(Dispatchers.IO + job)
@@ -76,6 +71,7 @@ class MainRepositoryImpl(
     private var recognizerJob = scope
     private var flashlightJob = scope
     private var playSoundJob = scope
+    private var monitorJob: Job? = null
 
     private val _spectrum: MutableStateFlow<Spectrum?> = MutableStateFlow(null)
     private val _key: MutableStateFlow<Char?> = MutableStateFlow(null)
@@ -184,6 +180,7 @@ class MainRepositoryImpl(
     private var previousContactsSize = 0 // Предыдущий размер списка контактов для отслеживания изменений
 
     private var isHelpMode = false // Флаг, который показывает, находимся ли мы в режиме просмотра помощи
+    private var isSmsMode = false // Флаг, который показывает, находимся ли мы в режиме просмотра сообщений
     private var sentences = emptyList<String>() // Список всех предложений помощи
     private var currentSentenceIndex = 0 // Индекс текущего просматриваемого предложения
 
@@ -242,6 +239,7 @@ class MainRepositoryImpl(
     private var frequencyCount: Int = 0 // Счетчик частот в диапазоне
     private var flagFrequencyCount = false
     private val alarmScheduler: AlarmScheduler = AlarmScheduler(context = context) // Будильник
+    private var skipNextClearMessage = false
 
     init {
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -1078,8 +1076,6 @@ class MainRepositoryImpl(
     //Основной блок обработки нажатий клавиш
     override fun clickKey(input: String, key: Char?) {
 
-        // Блок выбора с какой сим карты будет отправлено смс
-        // --- БЛОК ВЫБОРА SIM (только если карт больше одной) ---
         // --- БЛОК ВЫБОРА SIM (только если карт больше одной) ---
         if (isWaitingForSimChoice) {
             when (key) {
@@ -1089,8 +1085,7 @@ class MainRepositoryImpl(
                     // Используем системный сервис для проверки подписок
                     val subManager = context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as SubscriptionManager
 
-                    // ПРАВКА: Добавили android. перед Manifest и PackageManager
-                    val activeCount = if (androidx.core.app.ActivityCompat.checkSelfPermission(context, android.Manifest.permission.READ_PHONE_STATE) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    val activeCount = if (ActivityCompat.checkSelfPermission(context, android.Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
                         subManager.activeSubscriptionInfoList?.size ?: 0
                     } else 0
 
@@ -1198,19 +1193,25 @@ class MainRepositoryImpl(
             }
 
             // Блок обработки шага листания книги контактов или предложений раздела помощи
-            if (isContactMode || isHelpMode) {
+            if (isContactMode || isHelpMode || isSmsMode) {
                 val delta: Int = when (key) {
-                    '1' -> -1    // Листание на 1 контакт или предложение назад
-                    '7' -> 1     // Листание на 1 контакт или предложение вперед
-                    '2' -> -10   // Листание на 10 контактов или предложений назад
-                    '8' -> 10    // Листание на 10 контактов или предложений вперед
-                    '3' -> -100  // Листание на 100 контактов или предложений назад
-                    '9' -> 100   // Листание на 100 контактов или предложений вперед
-                    '4' -> 40    // Произнесение номера выбранного контакта
-                    '5' -> 30    // Удаление контакта
-                    else -> 0
+                    '1' -> -1    // Назад на 1
+                    '7' -> 1     // Вперед на 1
+                    '2' -> -10   // Назад на 10
+                    '8' -> 10    // Вперед на 10
+                    '3' -> -100  // Назад на 100
+                    '9' -> 100   // Вперед на 100
+
+                    '4' -> 0     // ПОВТОР (для СМС это 0)
+                    '5' -> 30    // УДАЛЕНИЕ ТЕКУЩЕГО (30)
+                    '0' -> 40    // УДАЛЕНИЕ ВСЕХ СМС (40)
+
+                    else -> 999  // Техническое значение для игнорирования других клавиш
                 }
-                navigateContactsHelp(delta)
+
+                if (delta != 999) {
+                    handleNavigationCommand(delta)
+                }
             }
 
             // Обработка нажатий клавиш быстрого набора
@@ -1358,6 +1359,8 @@ class MainRepositoryImpl(
 
                 isProgrammingMode = false // Выход из режима програмирования номеров быстрого набора
                 isContactMode = false // Выход из режима листания контактов
+                isSmsMode = false // Выход из режима листания контактов
+                isHelpMode = false // Выход из режима листания помощи
 
                 // Функция, где обрабатываются одиночные/двойные клики:
                 if (flagDoobleClic in 0..2) {
@@ -1427,27 +1430,22 @@ class MainRepositoryImpl(
                     utils.speakSimSignalLevels(context)
                 }
 
-                // Команда 4* (Прослушать SMS / Перейти к более новым)
+                // Команда 4* (Вход в режим SMS)
                 else if (input == "4" && getCall() == null) {
-                    if (smsNavigationIndex <= 0) {
-                        // Если индекс -1 (еще не начинали) или 0 (уже на самой новой)
-                        smsNavigationIndex = 0
-                        prefix = "Это самая новая смс. "
-                    } else {
-                        smsNavigationIndex-- // Перемещаемся к более новой
-                        prefix = ""
-                    }
+                    // Проверяем наличие сообщений через утилиту
+                    val (_, count) = utils.getIncomingSmsByIndex(context, 0)
 
-                    // Получаем и озвучиваем
-                    val (smsText, count) = utils.getIncomingSmsByIndex(context, smsNavigationIndex)
-                    totalSmsCount = count
-
-                    if (totalSmsCount == 0) {
+                    if (count == 0) {
                         speakText("Сообщения отсутствуют.")
+                        setInput("")
                     } else {
-                        speakText(prefix + smsText)
+                        isSmsMode = true
+                        totalSmsCount = count
+                        smsNavigationIndex = -1 // Ставим -1, чтобы при первом нажатии "7" (delta 1) стать на индекс 0
+
+                        speakText("Вы зашли в книгу входящих сообщений. Для перемещения по списку сообщений, по одному, используйте 7 и 1. по 10 сообщений 8 и 2. по 100 сообщений 9 и 3")
+                        setInput("")
                     }
-                    setInput("")
                 }
 
                 // Голосовой поиск абонента в телефонной книге по команде 5*
@@ -1460,7 +1458,7 @@ class MainRepositoryImpl(
                             withContext(Dispatchers.Main) {
                                 stopDtmf()
                                 utils.startSpeechRecognition(context) { result ->
-                                    startDtmfInternal() // Включаем микрофон обратно
+                                    startDtmf() // Включаем микрофон обратно
                                     setInput1("")
                                     if (result != null) {
                                         utils.getNameContact(result, context)
@@ -1524,6 +1522,11 @@ class MainRepositoryImpl(
                     utils.playRecordedFile(isTorchOnIs, subscribers, 0)
                     setInput("")
 
+                }
+
+                else if (input == "789" && getCall() == null) {
+                    utils.exportAllRecordsToPublicDirectory()
+                    setInput("")
                 }
 
                 // Настройка VOX Контрольное предложение не менять под него нарисована Диаграмма настройки
@@ -1924,7 +1927,7 @@ class MainRepositoryImpl(
                     setInput("")
                     setInput1("")
                     if (!isSpeaking) {
-                        speakText("Номеронабиратель, очищен")
+                        speakText("Звонок отменен")
                     }
                 }
 
@@ -1976,7 +1979,7 @@ class MainRepositoryImpl(
                             withContext(Dispatchers.Main) {
                                 stopDtmf()
                                 utils.startSpeechRecognition(context) { result ->
-                                    startDtmfInternal()
+                                    startDtmf()
                                     if (!result.isNullOrBlank()) {
                                         val phoneNumber = getInput1() ?: ""
 
@@ -2032,7 +2035,7 @@ class MainRepositoryImpl(
                             withContext(Dispatchers.Main) {
                                     stopDtmf()
                                 utils.startSpeechRecognition(context) { result ->
-                                    startDtmfInternal() // Включаем микрофон обратно
+                                    startDtmf() // Включаем микрофон обратно
                                     if (result != null) {
                                         if (result.length > 25) {
                                             speakText("Слишком длинное имя контакта")
@@ -2066,19 +2069,9 @@ class MainRepositoryImpl(
             else if (key == '#') {
 
                 flagDoobleClic = 0
-                isHelpMode = false // Выход из режима листания помощи
-                flagAmplitude = false // Выход из режима измерения амплитуды
-                flagFrequency = false // Выход из режима измерения частоты
-                flagSelective = false // Блокировка управления режимом селективного вызова
-                flagSimMonitor = false // Выход из режима попыток дозвониться при поиске точки расположения репитера
-                callStates.clear() // Очищаем массив по которому проводится анализ начался ли дозвон (есть ли сеть)
-                isContactMode = false // Выход из режима листания контактов
-                setFlagFrequencyLowHigt(false) // Отключение отображения верхней и нижней частоты DTMF
-                flagDtmf = false // Отключение генератора двухтональных команд
                 textToSpeech.stop() // Остановка ТТС
                 isSpeaking = false
                 flagFlashLight = false // Сброс флага управления вспышкой по нажатию PTT
-                isProgrammingMode = false // Выход из режима программирования номеров быстрого набора
                 setFlashlight(false) // Отключаем вспышку если она включена
 
                 if (getCall() == null) {
@@ -2186,29 +2179,7 @@ class MainRepositoryImpl(
 
                     // Команда 4# (Перейти к более старым)
                     else if (input == "4" && getCall() == null) {
-                        if (smsNavigationIndex == -1) {
-                            smsNavigationIndex = 0
-                            prefix = ""
-                        } else {
-                            // Проверяем, не достигли ли мы конца
-                            if (smsNavigationIndex >= totalSmsCount - 1 && totalSmsCount > 0) {
-                                smsNavigationIndex = totalSmsCount - 1 // Фиксируем на последнем
-                                prefix = "Это самая старая смс. "
-                            } else {
-                                smsNavigationIndex++ // Листаем дальше
-                                prefix = ""
-                            }
-                        }
-
-                        // Получаем и озвучиваем
-                        val (smsText, count) = utils.getIncomingSmsByIndex(context, smsNavigationIndex)
-                        totalSmsCount = count
-
-                        if (totalSmsCount == 0) {
-                            speakText("Сообщения отсутствуют.")
-                        } else {
-                            speakText(prefix + smsText)
-                        }
+                        speakText("Команда не назначена")
                         setInput("")
                     }
 
@@ -2222,7 +2193,7 @@ class MainRepositoryImpl(
                                 withContext(Dispatchers.Main) {
                                     stopDtmf()
                                     utils.startSpeechRecognition(context) { result ->
-                                        startDtmfInternal() // Включаем микрофон обратно
+                                        startDtmf() // Включаем микрофон обратно
                                         if (result != null) {
                                             val isDeleted = utils.deleteContactByName(result, context)
                                             if (isDeleted) {
@@ -2248,7 +2219,7 @@ class MainRepositoryImpl(
 
                     // Очистка номеров быстрого набора по команде 6*
                     else if (input == "6" && getCall() == null) {
-                        utils.deleteAllSms(context)
+                        speakText("Команда не назначена")
                         setInput("")
                     }
 
@@ -2389,14 +2360,90 @@ class MainRepositoryImpl(
                         if (getIsRecording()) {
                             pruning = 800 // Обрезаем последюю секунду чтобы потом не было слышно завершающего DTMF тона решетки
                             utils.stopRecording(isTorchOnIs, subscribers, pruning)
-                        } else speakText("Номеронабиратель, очищен")
+                        } else {
+                            when {
+                                isContactMode -> {
+                                    isContactMode = false
+                                    skipNextClearMessage = true
+                                    setInput("")
+                                    speakText("Вы вышли из режима пролистывания контактов")
+                                }
+                                isProgrammingMode -> {
+                                    isProgrammingMode = false
+                                    skipNextClearMessage = true
+                                    setInput("")
+                                    speakText("Вы вышли из режима программирования номеров быстрого набора")
+                                }
+                                isHelpMode -> {
+                                    isHelpMode = false
+                                    skipNextClearMessage = true
+                                    setInput("")
+                                    speakText("Вы вышли из режима пролиставания помощи")
+                                }
+                                isSmsMode-> {
+                                    isSmsMode = false
+                                    skipNextClearMessage = true
+                                    setInput("")
+                                    speakText("Вы вышли из режима пролистывания сообщений")
+                                }
+                                flagAmplitude -> {
+                                    flagAmplitude = false
+                                    skipNextClearMessage = true
+                                    setInput("")
+                                    speakText("Режим измерения амплитуды отключен")
+                                }
+                                flagFrequency -> {
+                                    flagFrequency = false
+                                    skipNextClearMessage = true
+                                    setInput("")
+                                    speakText("Режим измерения частоты отключен")
+                                }
+                                flagSimMonitor -> {
+                                    flagSimMonitor = false
+                                    monitorJob?.cancel()
+                                    monitorJob = null
+                                    textToSpeech.stop()
+                                    if (getCall() != null) {
+                                        DtmfService.callEnd(context)
+                                    }
+                                    callStates.clear()
+                                    skipNextClearMessage = true
+                                    setInput("")
+                                    speakText("Мониторинг сети остановлен")
+                                }
+                                flagSelective  -> {
+                                    flagSelective = false
+                                    skipNextClearMessage = true
+                                    setInput("")
+                                    speakText("Режим селективного вызова отключен")
+                                }
+                                flagDtmf -> {
+                                    flagDtmf = false
+                                    skipNextClearMessage = true
+                                    setInput("")
+                                    speakText("Генератор двухтональных команд отключен")
+                                }
+                                getFlagFrequencyLowHigt() -> {
+                                    setFlagFrequencyLowHigt(false)
+                                    skipNextClearMessage = true
+                                    speakText("Двойной частотомер отключен")
+                                }
+                                else -> {
+                                    if (skipNextClearMessage) {
+                                        skipNextClearMessage = false
+                                    } else {
+                                        speakText("Номеронабиратель, очищен")
+                                    }
+                                }
+                            }
+                        }
                     }
                 } else {
                     DtmfService.callEnd(context)
                 }
             } else {
                 if (key != 'R' && key != 'S' && key != 'T' && key != 'V') {
-                    if (!isContactMode && !isHelpMode) { // Блокировка печати в режимах пролистывания контактов и помощи
+                    if (!isContactMode && !isHelpMode && !isSmsMode) { // Блокировка печати в режимах пролистывания контактов помощи и сообщений
                         setInput(input + key)}
                 } else {
                     if (!isTorchOn) {
@@ -2469,20 +2516,21 @@ class MainRepositoryImpl(
         }
     }
 
-    // 1. Этот метод вызывается из Активити
+    
     override fun startDtmf() {
-        DtmfService.start(context) // Просто «пинаем» сервис
-    }
-
-    // 2. Этот метод вызывает только Сервис
-    override fun startDtmfInternal() {
+//        speakText("Функция старта вызвана")
         setStatusDtmf(true)
         if (job.isActive) {
             job.cancel()
         }
         initJob()
         setInput("")
-        recorderJob.launch { record() }
+        recorderJob.launch {
+            // Даем сервису 2 секунды, чтобы он "закрепился" в уведомлении
+            // и система признала его Foreground-процессом
+            delay(2000)
+            record()
+        }
         recognizerJob.launch { recognize() }
         if (getMagneticFieldFlag()) { setTimer(30000) }
     }
@@ -2532,7 +2580,11 @@ class MainRepositoryImpl(
 
     // Функция мониторинга возможности выполнить вызов для нахождения точки установки репитера
     private fun checkCallStateSequence() {
-        scope.launch {
+        // На всякий случай отменяем предыдущий запуск, если он был
+        monitorJob?.cancel()
+
+        // Запускаем в индивидуальную корутину
+        monitorJob = scope.launch {
             speakText("Поиск точки расположения репитера. Попытки выполнить вызов будут выполняться непрерывно")
             delay(11000)
 
@@ -2540,152 +2592,221 @@ class MainRepositoryImpl(
             var currentSim = 0
 
             while (flagSimMonitor) {
-                setInput(monitorNumber) // Тестовый звонок будет выполняться на этот номер (можно указать любой)
+                setInput(monitorNumber)
                 setSim(currentSim)
-                delay(500) // Без этой задержки происходил откат к стандартной звонилке
+                delay(500)
                 DtmfService.callStart(context)
 
-                // Записываем состояние вызова в массив и если встретилась комбинация 1->7
-                // (вызов отклонили) или 1->4 (трубку подняли) выходим из цикла
-                for (i in 1..durationSeconds) {
+                for (i in 1..durationSeconds * 10) { // Опрос состояний
+                    if (!flagSimMonitor) break
                     val currentState = getCallState()
                     callStates.add(currentState)
                     if (callStates.size >= 2) {
                         val lastIndex = callStates.size - 1
                         if (callStates[lastIndex - 1] == 1 && (callStates[lastIndex] == 7 || callStates[lastIndex] == 4)) break
                     }
-                    delay(100) // Фиксируем значения каждые 100мс
+                    delay(100)
                 }
 
                 var isSuccess = false
-
-                // Анализируем весь массив и если встретилась комбинация 9->1 (сеть есть дозвон пошел) выходим из цикла
                 for (i in 0 until callStates.size - 1) {
                     if (callStates[i] == 9 && callStates[i + 1] == 1) {
                         isSuccess = true
                         break
                     }
                 }
-
                 callStates.clear()
 
                 if (isSuccess) {
                     if (getCall() != null) DtmfService.callEnd(context)
                     delay(5000)
-                    speakText("Попытка вызова с ${if (currentSim == 0) "первой" else "второй"} сим карты выполнена успешно")
-                    setInput("")
+                    if (flagSimMonitor) speakText("Попытка вызова с ${if (currentSim == 0) "первой" else "второй"} сим карты выполнена успешно")
                 } else {
                     if (getCall() != null) DtmfService.callEnd(context)
-                    speakText("Попытка вызова с ${if (currentSim == 0) "первой" else "второй"} сим карты не удалась, переместитесь в другое место, здесь нет сигнала базовой станции")
-                    setInput("")
+                    if (flagSimMonitor) speakText("Попытка вызова с ${if (currentSim == 0) "первой" else "второй"} сим карты не удалась, переместитесь в другое место, здесь нет сигнала базовой станции")
                 }
 
-                // Переключаем на следующую SIM-карту
+                setInput("")
                 currentSim = if (currentSim == 0) 1 else 0
 
-                // Задержка перед следующим вызовом
+                // Если флаг уже сброшен, не ждем 40 секунд, а выходим сразу
+                if (!flagSimMonitor) break
+
                 delay(40000)
             }
         }
     }
 
 
-    private fun navigateContactsHelp(delta: Int) {
-        // Логика для пролистывания контактов
-        if (delta != 0 && delta != 30 && delta != 40 && !isHelpMode) {
-            val currentContactsSize = contacts.size
-            val wasContactDeleted = (previousContactsSize > 0 && currentContactsSize == previousContactsSize - 1)
-            currentContactIndex = (currentContactIndex + delta) % contacts.size
+    private fun handleNavigationCommand(delta: Int) {
+        // --- 1. ЛОГИКА РЕЖИМА SMS ---
+        if (isSmsMode) {
 
-            if (currentContactIndex < 0) {
-                currentContactIndex += contacts.size
-            }
-
-            val actualIndex = if (wasContactDeleted && delta > 0) {
-                val correctedIndex = if (currentContactIndex > 0) currentContactIndex - 1 else 0
-                correctedIndex
-            } else {
-                currentContactIndex
-            }
-
-            val contact = contacts[actualIndex]
-            val contactName = contact.first
-            val contactNumber = contact.second
-            speakText(contactName)
-            isCommandProcessed = true
-            if (contactNumber.length > 11) {
-                speakText("Выбранный номер не помещается в стандартное поле")
-            } else {
-                setInput(contactNumber)
-            }
-
-            
-            // Обновляем предыдущий размер списка
-            previousContactsSize = currentContactsSize
-
-            // Логика для произнесения номера выбранного контакта
-        } else if (delta == 40 && !isHelpMode) {
-            if (getInput() != "") {
-                speakText(utils.numberToText(getInput().toString()))
-            } else {
-                speakText("Нет выбранного контакта")
-            }
-            isCommandProcessed = true
-
-            // Логика для удаления контактов
-        } else if (delta == 30 && !isHelpMode) {
-            val currentInput = getInput()
-
-            if (currentInput.isNullOrEmpty()) {
-                speakText("Для удаления контакта сначала выберите его из списка")
+            // 1. ПОВТОР (Кнопка 4 -> delta 0)
+            // Должна стоять ПЕРВОЙ, чтобы исключить ложные срабатывания
+            if (delta == 0) {
+                if (smsNavigationIndex != -1 && totalSmsCount > 0) {
+                    val (smsText, _) = utils.getIncomingSmsByIndex(context, smsNavigationIndex)
+                    speakText(smsText)
+                } else if (smsNavigationIndex == -1) {
+                    speakText("Сначала выберите сообщение кнопками один или семь.")
+                    setInput("")
+                }
                 isCommandProcessed = true
                 return
             }
 
-            if (currentContactIndex >= 0 && currentContactIndex < contacts.size) {
-                val contactName = contacts[currentContactIndex].first
-                val contactNumber = contacts[currentContactIndex].second
+            // 2. УДАЛЕНИЕ ВСЕХ (Кнопка 0 -> delta 40)
+            if (delta == 40) {
+                if (smsNavigationIndex != -1) {
+                    utils.deleteAllSms(context)
+                    isSmsMode = false
+                    smsNavigationIndex = -1
+                } else {
+                    speakText("Сначала выберите сообщение.")
+                    setInput("")
+                }
+                isCommandProcessed = true
+                return
+            }
 
-                val isDeleted = utils.deleteContactByName(contactName, context)
-
-                if (isDeleted) {
-                    speakText("Контакт $contactName успешно удален из телефонной книги")
-                    previousContactsSize = contacts.size // Сохраняем размер до удаления
-                    contacts = contacts.filterNot { it.first == contactName && it.second == contactNumber }
-
-                    if (contacts.isNotEmpty()) {
-                        if (currentContactIndex >= contacts.size) {
-                            currentContactIndex = contacts.size - 1
-                        }
+            // 3. УДАЛЕНИЕ ТЕКУЩЕГО (Кнопка 5 -> delta 30)
+            if (delta == 30) {
+                if (smsNavigationIndex != -1 && totalSmsCount > 0) {
+                    val isDeleted = utils.deleteSmsByIndex(context, smsNavigationIndex)
+                    if (isDeleted) {
+                        speakText("Текущее сообщение было удалено.")
                         setInput("")
+                        val (_, newCount) = utils.getIncomingSmsByIndex(context, 0)
+                        totalSmsCount = newCount
+
+                        if (totalSmsCount == 0) {
+                            isSmsMode = false
+                            smsNavigationIndex = -1
+                            speakText("Сообщений больше нет.")
+                            setInput("")
+                        } else if (smsNavigationIndex >= totalSmsCount) {
+                            smsNavigationIndex = totalSmsCount - 1
+                        }
                     } else {
-                        speakText("Книга контактов пуста. Удалять больше нечего.")
-                        isContactMode = false
+                        speakText("Ошибка удаления.")
                         setInput("")
                     }
                 } else {
-                    speakText("Не удалось удалить контакт")
+                    speakText("Сначала выберите сообщение.")
                     setInput("")
                 }
-            } else {
-                speakText("Невозможно удалить номер, которого уже нет.")
+                isCommandProcessed = true
+                return
             }
-            isCommandProcessed = true
 
-            // Логика для пролистывания помощи/сообщений
-        } else if (isHelpMode) {
-            if (delta != 0) {
-                currentSentenceIndex = (currentSentenceIndex + delta) % sentences.size
-                if (currentSentenceIndex < 0) {
-                    currentSentenceIndex += sentences.size
+            // 4. НАВИГАЦИЯ (7, 1, 8, 2, 9, 3)
+            // Сюда попадем только если delta НЕ равна 0, 30 или 40
+            if (totalSmsCount <= 0) {
+                speakText("Сообщения отсутствуют.")
+                setInput("")
+                isSmsMode = false
+                return
+            }
+
+            if (smsNavigationIndex == -1) {
+                smsNavigationIndex = 0 // Инициализация при первом нажатии навигации
+            } else {
+                val nextIndex = smsNavigationIndex + delta
+
+                if (nextIndex < 0) {
+                    speakText("Выше по списку сообщений нет. Это самое новое.")
+                    setInput("")
+                    isCommandProcessed = true
+                    return
+                } else if (nextIndex >= totalSmsCount) {
+                    speakText("Ниже по списку сообщений нет. Это самое старое.")
+                    setInput("")
+                    isCommandProcessed = true
+                    return
+                }
+                smsNavigationIndex = nextIndex
+            }
+
+            val (smsText, _) = utils.getIncomingSmsByIndex(context, smsNavigationIndex)
+            speakText(smsText)
+            isCommandProcessed = true
+            return
+        }
+
+        // --- 2. ЛОГИКА РЕЖИМА КОНТАКТОВ ---
+        else if (isContactMode) {
+            // Навигация по контактам (delta != 0, 30, 40)
+            if (delta != 0 && delta != 30 && delta != 40) {
+                val currentContactsSize = contacts.size
+                if (currentContactsSize == 0) return
+
+                val wasContactDeleted = (previousContactsSize > 0 && currentContactsSize == previousContactsSize - 1)
+                currentContactIndex = (currentContactIndex + delta) % contacts.size
+
+                if (currentContactIndex < 0) {
+                    currentContactIndex += contacts.size
                 }
 
-                if (currentSentenceIndex >= 0 && currentSentenceIndex < sentences.size) {
-                    val currentSentence = sentences[currentSentenceIndex]
-                    speakText(currentSentence)
-                    isCommandProcessed = true
+                val actualIndex = if (wasContactDeleted && delta > 0) {
+                    if (currentContactIndex > 0) currentContactIndex - 1 else 0
+                } else {
+                    currentContactIndex
+                }
+
+                val contact = contacts[actualIndex]
+                speakText(contact.first)
+                isCommandProcessed = true
+
+                if (contact.second.length > 11) {
+                    speakText("Выбранный номер не помещается в стандартное поле")
+                    setInput("")
+                } else {
+                    setInput(contact.second)
+                }
+                previousContactsSize = currentContactsSize
+            }
+            // Озвучка номера контакта (delta 40)
+            else if (delta == 40) {
+                if (getInput() != "") {
+                    speakText(utils.numberToText(getInput().toString()))
+                } else {
+                    speakText("Нет выбранного контакта")
                     setInput("")
                 }
+                isCommandProcessed = true
+            }
+            // Удаление контакта (delta 30)
+            else if (delta == 30) {
+                val currentInput = getInput()
+                if (currentInput.isNullOrEmpty()) {
+                    speakText("Для удаления контакта сначала выберите его из списка")
+                } else if (currentContactIndex >= 0 && currentContactIndex < contacts.size) {
+                    val contactName = contacts[currentContactIndex].first
+                    if (utils.deleteContactByName(contactName, context)) {
+                        speakText("Контакт $contactName успешно удален")
+                        previousContactsSize = contacts.size
+                        contacts = contacts.filterNot { it.first == contactName }
+                        if (contacts.isEmpty()) {
+                            isContactMode = false
+                        }
+                        setInput("")
+                    }
+                }
+                isCommandProcessed = true
+            }
+        }
+
+        // --- 3. ЛОГИКА РЕЖИМА ПОМОЩИ ---
+        else if (isHelpMode && delta != 0) {
+            currentSentenceIndex = (currentSentenceIndex + delta) % sentences.size
+            if (currentSentenceIndex < 0) {
+                currentSentenceIndex += sentences.size
+            }
+            if (currentSentenceIndex >= 0 && currentSentenceIndex < sentences.size) {
+                speakText(sentences[currentSentenceIndex])
+                isCommandProcessed = true
+                setInput("")
             }
         }
     }

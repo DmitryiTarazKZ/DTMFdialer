@@ -132,11 +132,11 @@ interface MainRepository {
     suspend fun recognize()
 
     fun clickKey(input: String, key: Char?)
+
     fun stopDtmf()
 
     fun startDtmf()
 
-    fun startDtmfInternal()
     fun handleIncomingSms(context: Context)
 
     fun speakText(text: String)

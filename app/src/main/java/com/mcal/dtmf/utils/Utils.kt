@@ -14,6 +14,9 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
+import android.media.MediaCodec
+import android.media.MediaCodecInfo
+import android.media.MediaFormat
 import android.media.MediaRecorder
 import android.media.ToneGenerator
 import android.net.ConnectivityManager
@@ -22,6 +25,7 @@ import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.StatFs
@@ -922,7 +926,34 @@ class Utils(
         return Pair("Ошибка при чтении сообщения.", 0)
     }
 
-    // Удаление всех SMS по команде 4# (требуется быть приложением по умолчанию для SMS на Android 4.4+) ФУНКЦИЯ НЕ РАБОТАЕТ!!!
+    // 1. Удаление одного конкретного SMS по его индексу в списке
+    fun deleteSmsByIndex(context: Context, index: Int): Boolean {
+        val smsUri = Uri.parse("content://sms/inbox")
+
+        // Запрашиваем только ID, используя ту же сортировку, что и при чтении
+        val cursor = context.contentResolver.query(
+            smsUri,
+            arrayOf("_id"),
+            null,
+            null,
+            "date DESC"
+        )
+
+        cursor?.use {
+            if (it.moveToPosition(index)) {
+                // Получаем системный ID сообщения
+                val id = it.getLong(it.getColumnIndexOrThrow("_id"))
+                val deleteUri = Uri.parse("content://sms/$id")
+
+                // Выполняем удаление
+                val rowsDeleted = context.contentResolver.delete(deleteUri, null, null)
+                return rowsDeleted > 0
+            }
+        }
+        return false
+    }
+
+    // 2. Удаление всех входящих SMS
     fun deleteAllSms(context: Context) {
         // Проверка права на чтение (для чтения статуса/подсказки) — фактическое удаление доступно только приложению SMS по умолчанию
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
@@ -948,13 +979,17 @@ class Utils(
             val deleted = context.contentResolver.delete(Uri.parse("content://sms"), null, null)
             if (deleted > 0) {
                 mainRepository.speakText("Все сообщения удалены")
+                mainRepository.setInput("")
             } else {
                 mainRepository.speakText("Сообщений для удаления не найдено")
+                mainRepository.setInput("")
             }
         } catch (se: SecurityException) {
             mainRepository.speakText("Недостаточно прав для удаления сообщений")
+            mainRepository.setInput("")
         } catch (e: Exception) {
             mainRepository.speakText("Ошибка при удалении сообщений")
+            mainRepository.setInput("")
         } finally {
             mainRepository.setInput("")
         }
@@ -1926,6 +1961,165 @@ class Utils(
                 mainRepository.setInput("")
             }
         }
+    }
+
+    fun exportAllRecordsToPublicDirectory() {
+        scope.launch(Dispatchers.IO) {
+            // 1. Получаем доступ к папке с PCM файлами
+            val internalDir = context.getExternalFilesDir(null)
+            if (internalDir == null || !internalDir.exists()) {
+                withContext(Dispatchers.Main) {
+                    mainRepository.speakText("Ошибка. Внутренняя папка не найдена.")
+                }
+                return@launch
+            }
+
+            // Ищем все PCM файлы, игнорируя регистр (pcm или PCM)
+            val pcmFiles = internalDir.listFiles { _, name ->
+                name.lowercase().endsWith(".pcm")
+            }?.sortedBy { it.lastModified() } // Сортируем от старых к новым
+
+            if (pcmFiles.isNullOrEmpty()) {
+                withContext(Dispatchers.Main) {
+                    mainRepository.speakText("Нет записанных файлов для выгрузки.")
+                }
+                return@launch
+            }
+
+            // 2. Озвучка начала процесса
+            withContext(Dispatchers.Main) {
+                mainRepository.speakText("Найдено ${pcmFiles.size} записей. Начинаю выгрузку в папку загрузки, пожалуйста подождите.")
+            }
+
+            // Пауза, чтобы голос успел проговорить начало
+            delay(4000)
+
+            // 3. Подготовка папки назначения
+            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            val exportDir = File(downloadsDir, "DTMF_Records")
+            if (!exportDir.exists()) {
+                exportDir.mkdirs()
+            }
+
+            // Формат даты: 29.12.2025_08.34 (двоеточия заменены на точки для совместимости)
+            val dateFormat = SimpleDateFormat("dd.MM.yyyy_HH.mm", Locale.getDefault())
+            var successCount = 0
+
+            // 4. Цикл конвертации
+            pcmFiles.forEachIndexed { index, pcmFile ->
+                val dateStr = dateFormat.format(Date(pcmFile.lastModified()))
+
+                // Формируем имя: Запись_001_29.12.2025_08.34.m4a
+                val formattedIndex = String.format("%03d", index + 1)
+                val newName = "Запись_${formattedIndex}_$dateStr.m4a"
+                val outFile = File(exportDir, newName)
+
+                try {
+                    // Вызов функции кодирования (она ниже)
+                    encodePcmToAac(pcmFile, outFile)
+                    successCount++
+                    Log.d("EXPORT", "Файл готов: $newName")
+                } catch (e: Exception) {
+                    Log.e("EXPORT", "Ошибка при обработке ${pcmFile.name}: ${e.message}")
+                }
+            }
+
+            // 5. Финальная озвучка результата
+            withContext(Dispatchers.Main) {
+                if (successCount > 0) {
+                    mainRepository.speakText("Выгрузка завершена успешно. Перенесено $successCount файлов. Проверьте папку Ди Ти Эм Эф Рекордс в загрузках.")
+                } else {
+                    mainRepository.speakText("Произошла ошибка. Файлы найдены, но не были сконвертированы.")
+                }
+            }
+        }
+    }
+
+    /**
+     * Вспомогательная функция кодирования PCM в AAC (M4A)
+     */
+    private fun encodePcmToAac(pcmFile: File, outFile: File) {
+        val sampleRate = 44100
+        val bitRate = 64000
+        val timeoutUs = 10000L
+
+        val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, sampleRate, 1)
+        format.setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+        format.setInteger(MediaFormat.KEY_BIT_RATE, bitRate)
+        format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 1024 * 10)
+
+        val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
+        codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+        codec.start()
+
+        FileInputStream(pcmFile).use { fis ->
+            FileOutputStream(outFile).use { fos ->
+                val bufferInfo = MediaCodec.BufferInfo()
+                var isDone = false
+
+                while (!isDone) {
+                    val inputBufferIndex = codec.dequeueInputBuffer(timeoutUs)
+                    if (inputBufferIndex >= 0) {
+                        val inputBuffer = codec.getInputBuffer(inputBufferIndex)
+                        inputBuffer?.clear()
+
+                        val tempBuffer = ByteArray(inputBuffer?.capacity() ?: 1024)
+                        val read = fis.read(tempBuffer)
+
+                        if (read == -1) {
+                            codec.queueInputBuffer(inputBufferIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                        } else {
+                            inputBuffer?.put(tempBuffer, 0, read)
+                            codec.queueInputBuffer(inputBufferIndex, 0, read, 0, 0)
+                        }
+                    }
+
+                    var outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, timeoutUs)
+                    while (outputBufferIndex >= 0) {
+                        if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                            isDone = true
+                        }
+
+                        val outBuffer = codec.getOutputBuffer(outputBufferIndex)
+                        if (outBuffer != null && bufferInfo.size > 0) {
+                            val outSize = bufferInfo.size
+                            val outPacketSize = outSize + 7
+                            val adtsHeader = ByteArray(7)
+
+                            // Добавляем ADTS заголовок, чтобы плееры видели файл
+                            addADTStoPacket(adtsHeader, outPacketSize)
+
+                            fos.write(adtsHeader)
+                            val chunk = ByteArray(outSize)
+                            outBuffer.get(chunk)
+                            fos.write(chunk)
+                        }
+
+                        codec.releaseOutputBuffer(outputBufferIndex, false)
+                        outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, timeoutUs)
+                    }
+                }
+            }
+        }
+        codec.stop()
+        codec.release()
+    }
+
+    /**
+     * ADTS заголовок для AAC потока
+     */
+    private fun addADTStoPacket(packet: ByteArray, packetLen: Int) {
+        val profile = 2 // AAC LC
+        val freqIdx = 4 // 44100Hz
+        val chanCfg = 1 // Mono
+
+        packet[0] = 0xFF.toByte()
+        packet[1] = 0xF9.toByte()
+        packet[2] = (((profile - 1) shl 6) + (freqIdx shl 2) + (chanCfg shr 2)).toByte()
+        packet[3] = (((chanCfg and 3) shl 6) + (packetLen shr 11)).toByte()
+        packet[4] = ((packetLen and 0x7FF) shr 3).toByte()
+        packet[5] = (((packetLen and 7) shl 5) + 0x1F).toByte()
+        packet[6] = 0xFC.toByte()
     }
 
     // Вспомогательная функция для преобразования номера абонента в текстовое представление
