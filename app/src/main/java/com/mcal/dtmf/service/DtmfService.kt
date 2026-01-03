@@ -41,88 +41,71 @@ class DtmfService : Service(), KoinComponent {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val action = intent?.action
-
-        // --- УДАЛЕНО: Больше не планируем пульс здесь через PendingIntent.getService ---
-
-        when (action) {
-            ACTION_START -> {
-                // При первом запуске из Activity запускаем цепочку пульса в ресивере
-                PulseReceiver.scheduleNextPulse(this)
-                updateNotification(StartType.USER)
+        // Если intent == null, значит сервис был убит системой и теперь восстановлен
+        if (intent == null) {
+            mainRepository.incrementSystemCount() // Фиксируем системный сбой
+            mainRepository.startDtmf()           // Запускаем логику
+            PulseReceiver.scheduleNextPulse(this)
+            updateForegroundNotification() // ДОБАВИТЬ СЮДА
+        } else {
+            // Обычная обработка экшенов
+            when (intent.action) {
+                ACTION_START -> start()
+                ACTION_CALL_START -> startCall()
+                ACTION_CALL_ANSWER -> answerCall()
+                ACTION_CALL_END -> endCall()
+                ACTION_STOP -> stop()
             }
-            ACTION_PULSE -> {
-                updateNotification(StartType.PULSE)
-            }
-            null -> {
-                // Если система убила и восстановила сервис сама
-                updateNotification(StartType.SYSTEM)
-            }
-            ACTION_CALL_START -> startCall()
-            ACTION_CALL_ANSWER -> answerCall()
-            ACTION_CALL_END -> endCall()
-            ACTION_STOP -> stop()
         }
-
-        // Теперь разрешаем запуск логики и при пульсе тоже,
-        // чтобы репозиторий обнулял свои джобы (initJob) каждые 30 минут
-        if (action == ACTION_START || action == null || action == ACTION_PULSE) {
-            mainRepository.startDtmf()
-        }
-
         return START_STICKY
     }
 
-    enum class StartType {
-        USER,    // Ручной запуск (ACTION_START) время
-        SYSTEM,  // Воскрешение системой (intent == null)
-        PULSE    // Обновление по таймеру (ACTION_PULSE)
-    }
+   // Выводим уведомление
+   private fun updateForegroundNotification() {
+       val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
 
-    private fun updateNotification(type: StartType) {
-        val prefs = getSharedPreferences("dtmf_stats", MODE_PRIVATE)
-        val edit = prefs.edit()
+       // 1. Создаем канал уведомлений (для Android 8.0 и выше)
+       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+           val channel = NotificationChannel(
+               NOTIFICATION_CHANNEL_ID,
+               "DTMF Service Channel",
+               NotificationManager.IMPORTANCE_LOW // Низкий приоритет, чтобы не пиликало при каждом обновлении
+           )
+           channel.description = "Канал для работы службы распознавания DTMF"
+           notificationManager.createNotificationChannel(channel)
+       }
 
-        when (type) {
-            StartType.USER -> {
-                val now = SimpleDateFormat("HH:mm dd.MM.yyyy", Locale.getDefault()).format(Date())
-                edit.clear()
-                edit.putString("start_time", now)
-                    .putInt("count_system", 0)
-                    .putInt("count_pulse", 0)
-            }
-            StartType.SYSTEM -> edit.putInt("count_system", prefs.getInt("count_system", 0) + 1)
-            StartType.PULSE -> edit.putInt("count_pulse", prefs.getInt("count_pulse", 0) + 1)
-        }
-        edit.apply()
+       // 2. Создаем Intent для открытия MainActivity при нажатии на уведомление
+       val notificationIntent = Intent(this, com.mcal.dtmf.MainActivity::class.java).apply {
+           flags = Intent.FLAG_ACTIVITY_SINGLE_TOP // Чтобы не плодить копии экрана
+       }
 
-        val stats = """
-            Время старта: ${prefs.getString("start_time", "--:--")}
-            Перезапуск системой: ${prefs.getInt("count_system", 0)}
-            Перезапуск через 30 мин: ${prefs.getInt("count_pulse", 0)}
-        """.trimIndent()
+       // Флаг FLAG_IMMUTABLE обязателен для Android 12+
+       val pendingIntent = PendingIntent.getActivity(
+           this,
+           0,
+           notificationIntent,
+           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+               PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+           } else {
+               PendingIntent.FLAG_UPDATE_CURRENT
+           }
+       )
 
-        val contentPendingIntent = PendingIntent.getActivity(this, 0,
-            Intent(this, com.mcal.dtmf.MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+       // 3. Собираем само уведомление
+       val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+           .setSmallIcon(R.mipmap.ic_launcher)
+           .setContentTitle("DTMF Телефон")
+           .setContentText("Распознавание DTMF работает")
+           .setPriority(NotificationCompat.PRIORITY_LOW)
+           .setCategory(NotificationCompat.CATEGORY_SERVICE)
+           .setContentIntent(pendingIntent) // Привязываем клик к открытию Activity
+           .setOngoing(true) // Делаем уведомление несмахиваемым
+           .build()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(NOTIFICATION_CHANNEL_ID, "Служба DTMF", NotificationManager.IMPORTANCE_LOW)
-            (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(channel)
-        }
-
-        val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("DTMF Телефон")
-            .setStyle(NotificationCompat.BigTextStyle().bigText(stats))
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setContentIntent(contentPendingIntent)
-            .setOngoing(true)
-            .setOnlyAlertOnce(true)
-            .build()
-
-        startForeground(1, notification)
-    }
+       // 4. Запускаем сервис в режиме Foreground (обязательно для доступа к микрофону)
+       startForeground(1, notification)
+   }
 
     private fun startCall() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) return
@@ -190,6 +173,17 @@ class DtmfService : Service(), KoinComponent {
     private fun endCall() { mainRepository.getCall()?.disconnect() }
     private fun answerCall() { mainRepository.getCall()?.answer(VideoProfile.STATE_AUDIO_ONLY) }
 
+    private fun start() {
+        // 2. Сразу ставим первый пульс, чтобы система начала тикать
+        PulseReceiver.scheduleNextPulse(this)
+
+        // 3. Запускаем саму логику
+        mainRepository.startDtmf()
+
+        // 4. Показываем уведомление
+        updateForegroundNotification()
+    }
+
     private fun stop() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) stopForeground(STOP_FOREGROUND_REMOVE)
         else @Suppress("DEPRECATION") stopForeground(true)
@@ -204,26 +198,41 @@ class DtmfService : Service(), KoinComponent {
     }
 
     companion object {
-        const val ACTION_CALL_START = "call_start"
-        const val ACTION_CALL_END = "call_end"
-        const val ACTION_CALL_ANSWER = "call_answer"
-        const val ACTION_START = "start"
-        const val ACTION_STOP = "stop"
-        const val ACTION_PULSE = "pulse"
+        internal const val ACTION_CALL_START = "call_start"
+        internal const val ACTION_CALL_END = "call_end"
+        internal const val ACTION_CALL_ANSWER = "call_answer"
+        internal const val ACTION_START = "start"
+        internal const val ACTION_STOP = "stop"
         const val NOTIFICATION_CHANNEL_ID = "DTMF"
 
-        fun start(context: Context) {
-            val intent = Intent(context, DtmfService::class.java).apply { action = ACTION_START }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+        fun callStart(context: Context) {
+            val intent = Intent(context, DtmfService::class.java)
+            intent.setAction(ACTION_CALL_START)
+            context.startService(intent)
         }
 
-        fun callStart(context: Context) = context.startService(Intent(context, DtmfService::class.java).apply { action = ACTION_CALL_START })
-        fun callEnd(context: Context) = context.startService(Intent(context, DtmfService::class.java).apply { action = ACTION_CALL_END })
-        fun callAnswer(context: Context) = context.startService(Intent(context, DtmfService::class.java).apply { action = ACTION_CALL_ANSWER })
-        fun stop(context: Context) = context.startService(Intent(context, DtmfService::class.java).apply { action = ACTION_STOP })
+        fun callEnd(context: Context) {
+            val intent = Intent(context, DtmfService::class.java)
+            intent.setAction(ACTION_CALL_END)
+            context.startService(intent)
+        }
+
+        fun callAnswer(context: Context) {
+            val intent = Intent(context, DtmfService::class.java)
+            intent.setAction(ACTION_CALL_ANSWER)
+            context.startService(intent)
+        }
+
+        fun start(context: Context) {
+            val intent = Intent(context, DtmfService::class.java)
+            intent.setAction(ACTION_START)
+            context.startService(intent)
+        }
+
+        fun stop(context: Context) {
+            val intent = Intent(context, DtmfService::class.java)
+            intent.setAction(ACTION_STOP)
+            context.startService(intent)
+        }
     }
 }

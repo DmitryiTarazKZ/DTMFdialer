@@ -27,22 +27,12 @@ class SmsReceiver : BroadcastReceiver(), KoinComponent {
                 saveSmsToDatabase(context, sender, body, time)
 
                 try {
-                    // 1. СНАЧАЛА АКТИВИТИ
                     val activityIntent = Intent(context, com.mcal.dtmf.MainActivity::class.java).apply {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                     }
                     context.startActivity(activityIntent)
-
-                    // 2. ПОТОМ СЕРВИС
-                    val serviceIntent = Intent(context, DtmfService::class.java).apply {
-                        action = DtmfService.ACTION_PULSE
-                    }
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        context.startForegroundService(serviceIntent)
-                    } else {
-                        context.startService(serviceIntent)
-                    }
-
+                    mainRepository.incrementSmsCount()
+                    mainRepository.startDtmf()
                     mainRepository.handleIncomingSms(context)
                 } catch (e: Exception) { }
             }

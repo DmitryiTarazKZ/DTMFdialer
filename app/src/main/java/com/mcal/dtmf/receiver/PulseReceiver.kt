@@ -7,8 +7,14 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import com.mcal.dtmf.data.repositories.main.MainRepository
+import com.mcal.dtmf.service.DtmfService
+import org.koin.core.component.KoinComponent
+import org.koin.core.component.inject
 
-class PulseReceiver : BroadcastReceiver() {
+class PulseReceiver : BroadcastReceiver(), KoinComponent {
+
+    private val mainRepository: MainRepository by inject()
 
     override fun onReceive(context: Context, intent: Intent?) {
 
@@ -17,8 +23,8 @@ class PulseReceiver : BroadcastReceiver() {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
         context.startActivity(activityIntent)
-
-        // 2. Ставим следующий через минуту
+        mainRepository.incrementPulseCount()
+        mainRepository.startDtmf()
         scheduleNextPulse(context)
     }
 

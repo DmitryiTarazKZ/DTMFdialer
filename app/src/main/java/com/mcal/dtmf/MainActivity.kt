@@ -81,6 +81,10 @@ class MainActivity : ComponentActivity() {
                 offerReplacingDefaultSmsApp()
                 waitForWindow()
 
+                // --- НОВОЕ: ЗАПРОС ЛОКАЦИИ (Предпоследний) ---
+                offerLocationAccess()
+                waitForWindow()
+
                 // Доступ к "Не беспокоить"
                 offerNotificationPolicyAccess()
                 waitForWindow()
@@ -158,6 +162,40 @@ class MainActivity : ComponentActivity() {
                 startActivity(intent)
             } catch (e: Exception) {
                 e.printStackTrace()
+            }
+        }
+    }
+
+    // Проверка включенного датчика GPS
+    private fun offerLocationAccess() {
+        val locationManager = getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
+        val isGpsEnabled = locationManager.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER)
+
+        if (!isGpsEnabled) {
+            // Отправляем пользователя включить GPS в шторке/настройках
+            val intent = Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
+            startActivity(intent)
+        } else {
+            // Если GPS включен, проверяем разрешение на фоновую локацию (для Android 10+)
+            checkBackgroundLocationPermission()
+        }
+    }
+
+    // Запрос фонового местоположения
+    private fun checkBackgroundLocationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val hasBackground = ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACCESS_BACKGROUND_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+
+            if (!hasBackground) {
+                // Запрашиваем фоновый доступ отдельно (согласно правилам Google)
+                ActivityCompat.requestPermissions(
+                    this,
+                    arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION),
+                    permissionCode + 1
+                )
             }
         }
     }
@@ -325,6 +363,31 @@ class MainActivity : ComponentActivity() {
             ) == PackageManager.PERMISSION_DENIED && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
         ) {
             permissionsToRequest.add(Manifest.permission.SCHEDULE_EXACT_ALARM)
+        }
+
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_DENIED
+        ) {
+            permissionsToRequest.add(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            ) == PackageManager.PERMISSION_DENIED
+        ) {
+            permissionsToRequest.add(Manifest.permission.ACCESS_COARSE_LOCATION)
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) { // Android 14
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.FOREGROUND_SERVICE_LOCATION) == PackageManager.PERMISSION_DENIED) {
+                permissionsToRequest.add(Manifest.permission.FOREGROUND_SERVICE_LOCATION)
+            }
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.FOREGROUND_SERVICE_MICROPHONE) == PackageManager.PERMISSION_DENIED) {
+                permissionsToRequest.add(Manifest.permission.FOREGROUND_SERVICE_MICROPHONE)
+            }
         }
 
         if (permissionsToRequest.isNotEmpty()) {

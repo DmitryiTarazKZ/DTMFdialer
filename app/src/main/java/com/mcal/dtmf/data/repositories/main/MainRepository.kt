@@ -137,6 +137,12 @@ interface MainRepository {
 
     fun startDtmf()
 
+    fun incrementPulseCount()
+
+    fun incrementSmsCount()
+
+    fun incrementSystemCount()
+
     fun handleIncomingSms(context: Context)
 
     fun speakText(text: String)

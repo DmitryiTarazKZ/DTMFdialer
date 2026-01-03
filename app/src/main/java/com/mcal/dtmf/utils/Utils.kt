@@ -497,6 +497,31 @@ class Utils(
         }
     }
 
+    // 1. Получение текущих координат смартфона
+    fun getCurrentLocation(context: Context): android.location.Location? {
+        val lm = context.getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
+        return try {
+            // Пытаемся взять по GPS, если нет - по вышкам/Wi-Fi
+            lm.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER)
+                ?: lm.getLastKnownLocation(android.location.LocationManager.NETWORK_PROVIDER)
+        } catch (e: SecurityException) {
+            null
+        }
+    }
+
+    fun calculateDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val results = FloatArray(1)
+        android.location.Location.distanceBetween(lat1, lon1, lat2, lon2, results)
+        return results[0].toDouble() / 1000.0 // в километры
+    }
+
+    fun calculateAzimuth(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val results = FloatArray(2)
+        android.location.Location.distanceBetween(lat1, lon1, lat2, lon2, results)
+        // results[1] - это начальный азимут
+        return (results[1].toDouble() + 360) % 360
+    }
+
     // Функция проверки доступен ли интернет
     fun isOnline(context: Context): Boolean {
         val connectivityManager =
