@@ -48,17 +48,13 @@ interface MainRepository {
     fun getInput2(): String?
     fun setInput2(value: String)
 
-    fun getMagneticFieldFlow(): Flow<Boolean>
-    fun getMagneticField(): Boolean?
-    fun setMagneticField(value: Boolean)
-
-    fun getMagneticFieldFlagFlow(): Flow<Boolean>
-    fun getMagneticFieldFlag(): Boolean?
-    fun setMagneticFieldFlag(value: Boolean)
-
     fun getFlashlightFlow(): Flow<Boolean>
     fun getFlashlight(): Boolean?
     fun setFlashlight(value: Boolean)
+
+    fun getFlagDtmfMicFlow(): Flow<Boolean>
+    fun getFlagDtmfMic(): Boolean?
+    fun setFlagDtmfMic(value: Boolean)
 
     fun getStatusDtmfFlow(): Flow<Boolean>
     fun getStatusDtmf(): Boolean?

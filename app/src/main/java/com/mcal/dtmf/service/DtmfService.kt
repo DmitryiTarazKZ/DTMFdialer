@@ -45,7 +45,7 @@ class DtmfService : Service(), KoinComponent {
         if (intent == null) {
             mainRepository.incrementSystemCount() // Фиксируем системный сбой
             mainRepository.startDtmf()           // Запускаем логику
-            PulseReceiver.scheduleNextPulse(this)
+            PulseReceiver.scheduleNextPulse(this) // Перезапускаем пульс
             updateForegroundNotification() // ДОБАВИТЬ СЮДА
         } else {
             // Обычная обработка экшенов

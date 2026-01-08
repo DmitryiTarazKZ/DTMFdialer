@@ -27,8 +27,7 @@ class MainViewModel(
             isPlaying = mainRepository.getIsPlaying() ?: false,
             micClickKeyCode = mainRepository.getMicKeyClick() ?: 0,
             timer = mainRepository.getTimer(),
-            magneticField = mainRepository.getMagneticField() ?: false,
-            magneticFieldFlag = mainRepository.getMagneticFieldFlag() ?: false,
+            flagDtmfMic = mainRepository.getFlagDtmfMic() ?: false,
             statusDtmf = mainRepository.getStatusDtmf() ?: false
         )
     )
@@ -94,14 +93,6 @@ class MainViewModel(
             }
         }.launchIn(screenModelScope)
 
-        mainRepository.getMagneticFieldFlow().map { value ->
-            _screenState.update {
-                it.copy(
-                    magneticField = value
-                )
-            }
-        }.launchIn(screenModelScope)
-
         mainRepository.getStatusDtmfFlow().map { value ->
             _screenState.update {
                 it.copy(
@@ -110,10 +101,10 @@ class MainViewModel(
             }
         }.launchIn(screenModelScope)
 
-        mainRepository.getMagneticFieldFlagFlow().map { value ->
+        mainRepository.getFlagDtmfMicFlow().map { value ->
             _screenState.update {
                 it.copy(
-                    magneticFieldFlag = value
+                    flagDtmfMic = value
                 )
             }
         }.launchIn(screenModelScope)

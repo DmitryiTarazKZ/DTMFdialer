@@ -9,6 +9,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.location.Location
+import android.location.LocationManager
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -26,7 +28,6 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
-import android.os.Handler
 import android.os.Looper
 import android.os.StatFs
 import android.provider.CallLog
@@ -42,8 +43,10 @@ import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.mcal.dtmf.data.repositories.main.MainRepository
+import com.mcal.dtmf.service.DtmfService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -60,8 +63,6 @@ import java.util.Locale
 import java.util.Timer
 import java.util.TimerTask
 import java.util.concurrent.TimeUnit
-import kotlin.coroutines.resume
-import kotlin.coroutines.suspendCoroutine
 import kotlin.math.PI
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -82,6 +83,45 @@ class Utils(
         loadRecordedFiles().toMutableList()
     }
     private var isRecordingLocal = false
+    // Переменная для хранения последней удачной локации
+    var lastCurrentLocation: Location? = null
+
+    // Объект-слушатель, который ловит данные от спутников
+    private val locationListener = object : android.location.LocationListener {
+        override fun onLocationChanged(location: Location) {
+            // Как только GPS выдал новую точку, сохраняем её в переменную
+            lastCurrentLocation = location
+        }
+
+        // Эти методы обязательны для реализации в старых версиях Android,
+        // оставляем их пустыми
+        override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+        override fun onProviderEnabled(provider: String) {}
+        override fun onProviderDisabled(provider: String) {}
+    }
+
+    private var previousContactsSize = 0 // Предыдущий размер списка контактов для отслеживания изменений
+    private var lastAzimuth: Int? = null      // Хранит число (например, 125)
+    private var lastDirection: String = ""    // Хранит слово (например, "Юго-Восток")
+    private var lastCalculationResult: String = "" // Хранит весь текст для кнопки 4
+    private var lastUserLatSpeech: String = ""
+    private var lastUserLonSpeech: String = ""
+    var smsNavigationIndex: Int = -1 // -1 означает, что навигация не активна, 0 — самое новое SMS.
+    var totalSmsCount: Int = 0      // Общее количество SMS, для проверки границ.
+    var sentences = emptyList<String>() // Список всех предложений помощи
+    var currentSentenceIndex = 0 // Индекс текущего просматриваемого предложения
+    var contacts: List<Pair<String, String>> = emptyList() // Список контактов (имя и номер)
+    var currentContactIndex = -1 // Индекс текущего просматриваемого контакта
+    var isContactMode = false // Флаг, который показывает, находимся ли мы в режиме просмотра контактов
+    var isSmsMode = false // Флаг, который показывает, находимся ли мы в режиме просмотра сообщений
+    var isHelpMode = false // Флаг, который показывает, находимся ли мы в режиме просмотра основных команд
+    var isHelpMode1 = false // Флаг, который показывает, находимся ли мы в режиме просмотра помощи
+    var isGpsMode = false // Флаг, который показывает, находимся ли мы в режиме навигации
+    private val durationSeconds = 30000 // Время в течении которого происходит попытка дозвона для мониторинга
+    var monitorJob: Job? = null
+    var flagSimMonitor = false
+    var monitorNumber: String = "87057895564" // Номер по умолчанию для тестовых звонков для проверки сети
+    val callStates = mutableListOf<Int>() // Список изменений вызова для мониторинга точки установки репитера
 
     companion object {
 
@@ -415,7 +455,7 @@ class Utils(
     }
 
     // Вспомогательная функция для нормализации номера к формату 87...
-    fun normalizeNumber(number: String): String {
+    private fun normalizeNumber(number: String): String {
         // Удаляем все символы, кроме цифр
         var normalized = number.replace(Regex("[^0-9]"), "")
 
@@ -497,27 +537,17 @@ class Utils(
         }
     }
 
-    // 1. Получение текущих координат смартфона
-    fun getCurrentLocation(context: Context): android.location.Location? {
-        val lm = context.getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
-        return try {
-            // Пытаемся взять по GPS, если нет - по вышкам/Wi-Fi
-            lm.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER)
-                ?: lm.getLastKnownLocation(android.location.LocationManager.NETWORK_PROVIDER)
-        } catch (e: SecurityException) {
-            null
-        }
-    }
-
-    fun calculateDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+    // Расчет расстояния по 2 координатам
+    private fun calculateDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
         val results = FloatArray(1)
-        android.location.Location.distanceBetween(lat1, lon1, lat2, lon2, results)
+        Location.distanceBetween(lat1, lon1, lat2, lon2, results)
         return results[0].toDouble() / 1000.0 // в километры
     }
 
-    fun calculateAzimuth(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+    // Расчет азимута на устройство
+    private fun calculateAzimuth(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
         val results = FloatArray(2)
-        android.location.Location.distanceBetween(lat1, lon1, lat2, lon2, results)
+        Location.distanceBetween(lat1, lon1, lat2, lon2, results)
         // results[1] - это начальный азимут
         return (results[1].toDouble() + 360) % 360
     }
@@ -861,6 +891,33 @@ class Utils(
         return false // Возвращаем false, если контакт не найден или не удален
     }
 
+    // 1. Мягкий старт (без удаления данных чипа)
+    fun startGpsSoft(context: Context) {
+        val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        locationManager.removeUpdates(locationListener)
+        if (ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+            locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0f, locationListener, Looper.getMainLooper())
+        }
+    }
+
+    // 2. Холодный старт (с полной очисткой)
+    private fun forceRefreshGps(context: Context) {
+        val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        lastCurrentLocation = null
+        locationManager.sendExtraCommand(LocationManager.GPS_PROVIDER, "delete_aiding_data", null)
+        locationManager.removeUpdates(locationListener)
+        if (ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+            locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0f, locationListener, Looper.getMainLooper())
+        }
+    }
+
+    // 3. Остановка (снятие питания с чипа)
+    fun stopGps(context: Context) {
+        val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        locationManager.removeUpdates(locationListener)
+        // lastCurrentLocation НЕ зануляем, чтобы старая точка была доступна для озвучки
+    }
+
     // Перемещение по списку смс
     fun getIncomingSmsByIndex(context: Context, index: Int): Pair<String, Int> { // Pair<Сообщение, ОбщееКоличество>
         val smsUri = Uri.parse("content://sms/inbox")
@@ -952,7 +1009,7 @@ class Utils(
     }
 
     // 1. Удаление одного конкретного SMS по его индексу в списке
-    fun deleteSmsByIndex(context: Context, index: Int): Boolean {
+    private fun deleteSmsByIndex(context: Context, index: Int): Boolean {
         val smsUri = Uri.parse("content://sms/inbox")
 
         // Запрашиваем только ID, используя ту же сортировку, что и при чтении
@@ -979,7 +1036,7 @@ class Utils(
     }
 
     // 2. Удаление всех входящих SMS
-    fun deleteAllSms(context: Context) {
+    private fun deleteAllSms(context: Context) {
         // Проверка права на чтение (для чтения статуса/подсказки) — фактическое удаление доступно только приложению SMS по умолчанию
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
             mainRepository.speakText("Недостаточно прав для удаления сообщений")
@@ -1024,7 +1081,7 @@ class Utils(
     fun sendSmsBySlot(context: Context, phoneNumber: String, message: String, slotIndex: Int): Boolean {
         return try {
             val subManager = context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as SubscriptionManager
-            if (ActivityCompat.checkSelfPermission(context, android.Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) return false
+            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) return false
 
             val activeList = subManager.activeSubscriptionInfoList
             if (activeList.isNullOrEmpty() || slotIndex >= activeList.size) return false
@@ -1059,14 +1116,9 @@ class Utils(
                     put("error_code", 0)
                 }
                 context.contentResolver.insert(Uri.parse("content://sms/sent"), values)
-            } catch (e: Exception) {
-                android.util.Log.d("Контрольный лог", "Ошибка записи базы: ${e.message}")
-            }
-
-            android.util.Log.d("Контрольный лог", "ОТПРАВЛЕНО (SubID: $realSubId). Проверьте значок SIM в SMS-приложении.")
+            } catch (e: Exception) {}
             true
         } catch (e: Exception) {
-            android.util.Log.d("Контрольный лог", "Сбой: ${e.message}")
             false
         }
     }
@@ -1114,7 +1166,7 @@ class Utils(
     }
 
     // Функция для преобразования текста СМС в нормальный русский текст если написано английскими буквами
-    fun convertToRussianText(input: String): String {
+    private fun convertToRussianText(input: String): String {
         // Удаляем ссылки из текста
         val cleanedInput = input.replace(Regex("https?://\\S+"), "")
 
@@ -2156,5 +2208,625 @@ class Utils(
             4 -> "четвертый"
             else -> "$number" // Если число больше 4, просто возвращаем его как строку
         }
+    }
+
+    // Логика обработки основных режимов навигации по помощи, контактам, смс, GPS
+    fun handleNavigationCommand(delta: Int) {
+        // --- 1. ЛОГИКА РЕЖИМА SMS ---
+        if (isSmsMode) {
+            when (delta) {
+                // 1. ПОВТОР (Кнопка 4)
+                4 -> {
+                    if (smsNavigationIndex != -1 && totalSmsCount > 0) {
+                        val (smsText, _) = getIncomingSmsByIndex(context, smsNavigationIndex)
+                        mainRepository.speakText(smsText)
+                    } else if (smsNavigationIndex == -1) {
+                        mainRepository.speakText("Сначала выберите сообщение кнопками один или семь.")
+                        mainRepository.setInput("")
+                    }
+                }
+
+                // 2. УДАЛЕНИЕ ВСЕХ (Кнопка 0)
+                0 -> {
+                    if (smsNavigationIndex != -1) {
+                        deleteAllSms(context)
+                        isSmsMode = false
+                        smsNavigationIndex = -1
+                    } else {
+                        mainRepository.speakText("Сначала выберите сообщение.")
+                        mainRepository.setInput("")
+                    }
+                }
+
+                // 3. УДАЛЕНИЕ ТЕКУЩЕГО (Кнопка 5)
+                5 -> {
+                    if (smsNavigationIndex != -1 && totalSmsCount > 0) {
+                        val isDeleted = deleteSmsByIndex(context, smsNavigationIndex)
+                        if (isDeleted) {
+                            mainRepository.speakText("Текущее сообщение было удалено.")
+                            mainRepository.setInput("")
+                            val (_, newCount) = getIncomingSmsByIndex(context, 0)
+                            totalSmsCount = newCount
+
+                            if (totalSmsCount == 0) {
+                                isSmsMode = false
+                                smsNavigationIndex = -1
+                                mainRepository.speakText("Сообщений больше нет.")
+                                mainRepository.setInput("")
+                            } else if (smsNavigationIndex >= totalSmsCount) {
+                                smsNavigationIndex = totalSmsCount - 1
+                            }
+                        } else {
+                            mainRepository.speakText("Ошибка удаления.")
+                            mainRepository.setInput("")
+                        }
+                    } else {
+                        mainRepository.speakText("Сначала выберите сообщение.")
+                        mainRepository.setInput("")
+                    }
+                }
+
+                6 -> {
+                    mainRepository.speakText("Команда не назначена")
+                }
+
+                // 4. НАВИГАЦИЯ (7, 1, 8, 2, 9, 3)
+                7, 1, 8, 2, 9, 3 -> {
+                    if (totalSmsCount <= 0) {
+                        mainRepository.speakText("Сообщения отсутствуют.")
+                        mainRepository.setInput("")
+                        isSmsMode = false
+                    } else {
+                        if (smsNavigationIndex == -1) {
+                            smsNavigationIndex = 0
+                        } else {
+                            val step = when (delta) {
+                                1 -> -1; 7 -> 1; 2 -> -10; 8 -> 10; 3 -> -100; 9 -> 100; else -> 0
+                            }
+                            val nextIndex = smsNavigationIndex + step
+
+                            if (nextIndex < 0) {
+                                mainRepository.speakText("Выше по списку сообщений нет. Это самое новое.")
+                                mainRepository.setInput("")
+                            } else if (nextIndex >= totalSmsCount) {
+                                mainRepository.speakText("Ниже по списку сообщений нет. Это самое старое.")
+                                mainRepository.setInput("")
+                            } else {
+                                smsNavigationIndex = nextIndex
+                            }
+                        }
+                        val (smsText, _) = getIncomingSmsByIndex(context, smsNavigationIndex)
+                        mainRepository.speakText(smsText)
+                    }
+                }
+            }
+            return // Завершаем обработку для режима SMS
+        }
+
+        // --- 2. ЛОГИКА РЕЖИМА КОНТАКТОВ ---
+        else if (isContactMode) {
+            when (delta) {
+                // Озвучка номера контакта (Кнопка 4)
+                4 -> {
+                    if (mainRepository.getInput() != "") {
+                        mainRepository.speakText(numberToText(mainRepository.getInput().toString()))
+                    } else {
+                        mainRepository.speakText("Нет выбранного контакта")
+                        mainRepository.setInput("")
+                    }
+                }
+
+                // Удаление контакта (Кнопка 5)
+                5 -> {
+                    val currentInput = mainRepository.getInput()
+                    if (currentInput.isNullOrEmpty()) {
+                        mainRepository.speakText("Для удаления контакта сначала выберите его из списка")
+                    } else if (currentContactIndex >= 0 && currentContactIndex < contacts.size) {
+                        val contactName = contacts[currentContactIndex].first
+                        if (deleteContactByName(contactName, context)) {
+                            mainRepository.speakText("Контакт $contactName успешно удален")
+                            previousContactsSize = contacts.size
+                            contacts = contacts.filterNot { it.first == contactName }
+                            if (contacts.isEmpty()) {
+                                isContactMode = false
+                            }
+                            mainRepository.setInput("")
+                        }
+                    }
+                }
+
+                6, 0 -> {
+                    mainRepository.speakText("Команда не назначена")
+                }
+
+                // Навигация по контактам (Кнопки 1, 7, 2, 8, 3, 9)
+                1, 7, 2, 8, 3, 9 -> {
+                    val currentContactsSize = contacts.size
+                    if (currentContactsSize == 0) return // Выход из блока, если пусто
+
+                    val step = when(delta) {
+                        1 -> -1; 7 -> 1; 2 -> -10; 8 -> 10; 3 -> -100; 9 -> 100; else -> 0
+                    }
+
+                    val wasContactDeleted = (previousContactsSize > 0 && currentContactsSize == previousContactsSize - 1)
+                    currentContactIndex = (currentContactIndex + step) % contacts.size
+
+                    if (currentContactIndex < 0) {
+                        currentContactIndex += contacts.size
+                    }
+
+                    val actualIndex = if (wasContactDeleted && step > 0) {
+                        if (currentContactIndex > 0) currentContactIndex - 1 else 0
+                    } else {
+                        currentContactIndex
+                    }
+
+                    val contact = contacts[actualIndex]
+                    mainRepository.speakText(contact.first)
+
+                    if (contact.second.length > 11) {
+                        mainRepository.speakText("Выбранный номер не помещается в стандартное поле")
+                        mainRepository.setInput("")
+                    } else {
+                        mainRepository.setInput(contact.second)
+                    }
+                    previousContactsSize = currentContactsSize
+                }
+            }
+        }
+
+        // --- 3. ЛОГИКА РЕЖИМА ПОМОЩИ ---
+        else if ((isHelpMode || isHelpMode1) && delta != 999) {
+            if (sentences.isEmpty()) {
+                isHelpMode = false
+                isHelpMode1 = false
+                return
+            }
+            val step = when(delta) {
+                1 -> -1; 7 -> 1; 2 -> -10; 8 -> 10; 3 -> -100; 9 -> 100; else -> 0
+            }
+            currentSentenceIndex = (currentSentenceIndex + step) % sentences.size
+            if (currentSentenceIndex < 0) {
+                currentSentenceIndex += sentences.size
+            }
+            if (currentSentenceIndex >= 0 && currentSentenceIndex < sentences.size) {
+                mainRepository.speakText(sentences[currentSentenceIndex])
+                mainRepository.setInput("")
+            }
+        }
+
+        // --- 4. ЛОГИКА РЕЖИМА GPS ---
+        else if (isGpsMode) {
+            when (delta) {
+                1 -> { // Кнопка 1: КООРДИНАТЫ РЕПИТЕРА
+                    val loc = lastCurrentLocation
+                    if (loc != null) {
+                        val latSpeech = formatCoordsForSpeech(loc.latitude)
+                        val lonSpeech = formatCoordsForSpeech(loc.longitude)
+                        mainRepository.speakText("Координаты репитера. Широта: $latSpeech. Долгота: $lonSpeech.")
+                    } else {
+                        mainRepository.speakText("Координаты еще не определены. Ждите.")
+                    }
+                }
+
+                2 -> { // Кнопка 2: ПОВТОР АЗИМУТА
+                    val azimuth = lastAzimuth
+                    if (azimuth != null) {
+                        mainRepository.speakText("Азимут на репитер $azimuth градусов. Направление на репитер $lastDirection.")
+                    } else {
+                        mainRepository.speakText("Азимут еще не получен. Выполните команду пять.")
+                    }
+                }
+
+                3 -> { // Кнопка 3: ВЫСОТА
+                    // Берем данные напрямую из переменной в utils
+                    val loc = lastCurrentLocation
+                    if (loc != null) {
+                        mainRepository.speakText("Высота репитера: ${loc.altitude.toInt()} метров над уровнем моря.")
+                    } else {
+                        mainRepository.speakText("Данные о высоте еще неполучены.")
+                    }
+                }
+
+                4 -> { // Кнопка 4: ПОВТОР ПОЛНОГО ОТЧЕТА
+                    if (lastCalculationResult.isNotEmpty()) {
+                        mainRepository.speakText(lastCalculationResult)
+                    } else {
+                        mainRepository.speakText("Предыдущих расчетов не найдено. Выполните команду пять.")
+                    }
+                    mainRepository.setInput("")
+                }
+
+                5 -> { // Кнопка 5: ВВОД ДАННЫХ АБОНЕНТА И РАСЧЕТ
+                    // Берем данные напрямую из переменной в utils
+                    val loc = lastCurrentLocation
+                    if (loc == null) {
+                        mainRepository.speakText("Координаты не получены. Спутники еще не зафиксированы.")
+                    } else {
+                        val accuracy = loc.accuracy.toInt()
+                        val stateStatus = when {
+                            accuracy <= 15 -> "Точность отличная, погрешность $accuracy метров."
+                            accuracy <= 50 -> "Точность хорошая, погрешность $accuracy метров."
+                            accuracy <= 150 -> "Точность средняя, погрешность $accuracy метров."
+                            else -> "Точность низкая, погрешность более $accuracy метров."
+                        }
+
+                        if (accuracy > 300) {
+                            mainRepository.speakText("$stateStatus Точность хуже 300 метров. Расчет отменен.")
+                        } else {
+                            mainRepository.speakText(stateStatus)
+                            mainRepository.setInput("")
+                            scope.launch {
+                                delay(9000) // Пауза, чтобы дослушать статус точности
+                                processAbonentCalculation(loc)
+                            }
+                        }
+                    }
+                }
+
+                6 -> { // Кнопка 6: ПОГРЕШНОСТЬ (Accuracy)
+                    // Берем данные напрямую из переменной в utils
+                    val loc = lastCurrentLocation
+                    if (loc != null) {
+                        mainRepository.speakText("Погрешность измерения в горизонтальной плоскости: ${loc.accuracy.toInt()} метров.")
+                    } else {
+                        mainRepository.speakText("Погрешность не определена, ожидайте фиксации спутников.")
+                    }
+                }
+
+                7 -> { // Кнопка 7: ЗАСЕЧКА
+                    if (lastUserLatSpeech.isNotEmpty() && lastUserLonSpeech.isNotEmpty()) {
+                        val latDouble = parseCoord(lastUserLatSpeech)
+                        val lonDouble = parseCoord(lastUserLonSpeech)
+                        if (latDouble != null && lonDouble != null) {
+                            val latSpeech = formatCoordsForSpeech(latDouble)
+                            val lonSpeech = formatCoordsForSpeech(lonDouble)
+                            mainRepository.speakText("Проверка последних введенных координат. Широта: $latSpeech Долгота: $lonSpeech.")
+                        } else {
+                            mainRepository.speakText("Ошибка формата сохраненных координат.")
+                        }
+                    } else {
+                        mainRepository.speakText("Последних введенных координат не обнаружено. Выполните команду пять.")
+                    }
+                }
+
+                8 -> {
+                    mainRepository.speakText("Команда не назначена")
+                }
+
+                9 -> {
+                    val manual = """
+        Инструкция по вводу. 
+        Координаты вводятся цифрами.
+        Для широты всегда вводите восемь цифр. Первые две станут градусами.
+        Для долготы: если градусов меньше ста, вводите восемь цифр. 
+        Если сто и более — вводите девять цифр. В этом случае первые три цифры станут градусами.
+        Внимание: ожидается формат десятичные градусы. Не используйте форматы с минутами и секундами напрямую, это приведет к ошибке в десятки километров.
+    """.trimIndent()
+                    mainRepository.speakText(manual)
+                }
+
+
+                0 -> { // Кнопка 0: ХОЛОДНЫЙ СТАРТ
+                    mainRepository.speakText("Принудительный сброс выполнен. Очистка кэша. Ожидайте поиск спутников.")
+
+                    forceRefreshGps(context)
+
+                    mainRepository.setInput("")
+
+                    scope.launch {
+                        delay(9000)
+                        val startTime = System.currentTimeMillis()
+                        var fixFound = false
+                        while (!fixFound && (System.currentTimeMillis() - startTime) < 120000) {
+                            val loc = lastCurrentLocation
+                            if (loc != null && loc.accuracy < 50) {
+                                mainRepository.speakText("Спутники найдены. Местоположение зафиксировано.")
+                                fixFound = true
+                                stopGps(context) // Выключаем для экономии
+                            }
+                        }
+                        if (!fixFound) {
+                            mainRepository.speakText("Таймаут поиска. Спутники не найдены.")
+                            stopGps(context)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Вспомогательная функция для расчета (вынесена для чистоты кода)
+    private suspend fun processAbonentCalculation(repeaterLoc: Location) {
+        isGpsMode = false
+
+        try {
+            // ШАГ 1: Ввод широты
+            mainRepository.speakText("Введите вашу широту. 8 цифр")
+            mainRepository.setInput("")
+            delay(30000)
+            val inputLat = (mainRepository.getInput() ?: "").trim()
+            val userLat = parseCoord(inputLat)
+
+            if (userLat == null) {
+                mainRepository.speakText("Ошибка ввода широты. Расчет отменен.")
+                return
+            }
+            lastUserLatSpeech = inputLat
+
+            // ШАГ 2: Ввод долготы
+            mainRepository.speakText("Принято. Введите долготу. 8 или 9 цифр")
+            mainRepository.setInput("")
+            delay(30000)
+            val inputLon = (mainRepository.getInput() ?: "").trim()
+            val userLon = parseCoord(inputLon)
+
+            if (userLon == null) {
+                mainRepository.speakText("Ошибка ввода долготы. Расчет отменен.")
+                return
+            }
+            lastUserLonSpeech = inputLon
+
+            // ШАГ 3: Ввод высоты
+            mainRepository.speakText("Принято. Введите вашу высоту. Четыре цифры.")
+            mainRepository.setInput("")
+            delay(20000)
+            val inputAltStr = (mainRepository.getInput() ?: "").filter { it.isDigit() }
+
+            if (inputAltStr.length != 4) {
+                mainRepository.speakText("Ошибка. Введено ${inputAltStr.length} цифр вместо четырёх. Расчет отменен.")
+                return
+            }
+            val userAlt = inputAltStr.toDoubleOrNull() ?: 0.0
+
+            // --- ГЕОМЕТРИЧЕСКИЕ РАСЧЕТЫ ---
+
+            val d = calculateDistance(repeaterLoc.latitude, repeaterLoc.longitude, userLat, userLon)
+            val km = d.toInt()
+            val m = ((d - km) * 1000).toInt()
+
+            val azimuthVal = calculateAzimuth(userLat, userLon, repeaterLoc.latitude, repeaterLoc.longitude).toInt()
+
+            val direction = when (azimuthVal) {
+                in 0..22, in 338..360 -> "Север"
+                in 23..67 -> "Северо-Восток"
+                in 68..112 -> "Восток"
+                in 113..157 -> "Юго-Восток"
+                in 158..202 -> "Юг"
+                in 203..247 -> "Юго-Запад"
+                in 248..292 -> "Запад"
+                in 293..337 -> "Северо-Запад"
+                else -> "не определено"
+            }
+
+            val altDiff = (userAlt - repeaterLoc.altitude).toInt()
+            val heightText = if (altDiff > 0) "Вы выше репитера на ${Math.abs(altDiff)} метров."
+            else if (altDiff < 0) "Вы ниже репитера на ${Math.abs(altDiff)} метров."
+            else "Вы на одной высоте с репитером."
+
+            val distText = "${if (km > 0) "$km километров " else ""}${if (m > 0) "$m метров" else ""}"
+
+            // --- СОХРАНЕНИЕ РЕЗУЛЬТАТОВ ---
+            lastAzimuth = azimuthVal
+            lastDirection = direction
+            lastCalculationResult = "Расстояние от вашего местоположения до точки расположения репитера составляет $distText. Азимут $azimuthVal градусов. Направление $direction. $heightText"
+
+            mainRepository.speakText(lastCalculationResult)
+
+        } catch (e: Exception) {
+            mainRepository.speakText("Произошла системная ошибка при расчете.")
+        } finally {
+            mainRepository.setInput("")
+            isGpsMode = true
+        }
+    }
+
+    private fun formatCoordsForSpeech(coord: Double): String {
+        val s = String.format("%.6f", coord).replace(",", ".") // Гарантируем формат 00.000000
+        val parts = s.split(".")
+        val degrees = parts[0] // Целое (например, 42)
+        val decimals = parts[1] // Дробь (например, 341700)
+
+        // Разбиваем дробную часть на два блока по 3 цифры
+        val block1 = decimals.substring(0, 3)
+        val block2 = decimals.substring(3, 6)
+
+        return "$degrees. запятая. $block1. $block2."
+    }
+
+    // Универсальный парсер:
+    private fun parseCoord(raw: String): Double? {
+        val clean = raw.filter { it.isDigit() }
+        if (clean.length < 3) return null
+        return try {
+            val degreeLength = if (clean.length >= 9) 3 else 2
+            val degrees = clean.substring(0, degreeLength)
+            var fraction = clean.substring(degreeLength)
+            while (fraction.length < 6) {
+                fraction += "0"
+            }
+            val limitedFraction = fraction.substring(0, 6)
+            (degrees + "." + limitedFraction).toDouble()
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    // Отчет о перезапусках
+    fun getSystemHealthStats(): String {
+        val prefs = context.getSharedPreferences("dtmf_stats", Context.MODE_PRIVATE)
+        val startTimeStr = prefs.getString("start_time", null) ?: return "Статистика пуста."
+
+        val countLogic = prefs.getInt("count_logic", 0)
+        val countSms = prefs.getInt("count_sms", 0)
+        val countSystem = prefs.getInt("count_system", 0)
+        val countPulse = prefs.getInt("count_pulse", 0)
+
+        val sdf = SimpleDateFormat("HH:mm dd.MM.yyyy", Locale.getDefault())
+        val startDate = try { sdf.parse(startTimeStr) } catch (e: Exception) { null } ?: return "Ошибка даты."
+
+        val diffMinutes = (System.currentTimeMillis() - startDate.time) / (1000 * 60)
+        val expectedPulsesByTime = diffMinutes / 30
+
+        val legalTriggers = countSms + countSystem + maxOf(countPulse.toLong(), expectedPulsesByTime)
+
+        // 1. Проверка на избыток (аномалии)
+        val anomalies = if (countLogic > (legalTriggers + 5)) countLogic - legalTriggers else 0L
+
+        // 2. Проверка на дефицит (засыпание)
+        val isPulseDeficit = diffMinutes > 40 && countPulse < (expectedPulsesByTime * 0.7)
+
+        // Формируем текст проблемы
+        var healthStatus = ""
+
+        // 1. Проверка на "левые" запуски
+        if (anomalies > 5) {
+            // Добавляем пробел в конце фразы
+            healthStatus = "Обнаружено $anomalies перезапусков не из ресиверов. "
+        }
+
+        // 2. Проверка таймера (добавляется к первой фразе, если она есть)
+        if (countPulse > (expectedPulsesByTime + 3)) {
+            healthStatus += "Внимание: таймер перезапуска срабатывает аномально часто."
+        } else if (isPulseDeficit) {
+            val missing = expectedPulsesByTime - countPulse
+            healthStatus += "Внимание: таймер перезапуска срабатывает аномально редко. Пропущено минимум $missing циклов."
+        }
+
+        // 3. Итоговый вывод
+        // Если обе проверки промолчали — всё хорошо.
+        val anomalyText = if (healthStatus.trim().isEmpty()) "Система стабильна." else healthStatus
+
+        // РАСЧЕТ ВРЕМЕНИ (Дни, Часы, Минуты)
+        val totalHours = diffMinutes / 60
+        val days = totalHours / 24
+        val hours = totalHours % 24
+        val mins = diffMinutes % 60
+
+        // Функция склонения дней
+        fun getDaysString(n: Long): String {
+            val lastDigit = n % 10
+            val lastTwoDigits = n % 100
+            return when {
+                lastTwoDigits in 11..19 -> "$n дней"
+                lastDigit == 1L -> "$n день"
+                lastDigit in 2..4 -> "$n дня"
+                else -> "$n дней"
+            }
+        }
+
+        val daysText = if (days > 0) "${getDaysString(days)} " else ""
+
+        return """
+    Статистика работы системы.
+    Старт произведен в $startTimeStr.
+    Время непрерывной работы: $daysText$hours ч. $mins мин.
+    Всего перезапусков: $countLogic.
+    Из них по таймеру перезапуска: $countPulse (ожидалось $expectedPulsesByTime).
+    по эс эм эс: $countSms.
+    Восстановлений системой: $countSystem.
+    $anomalyText
+""".trimIndent()
+    }
+
+    fun resetStats() {
+        val prefs = context.getSharedPreferences("dtmf_stats", Context.MODE_PRIVATE)
+        val now = SimpleDateFormat("HH:mm dd.MM.yyyy", Locale.getDefault()).format(Date())
+
+        prefs.edit()
+            .clear() // Удаляет старые данные
+            .putString("start_time", now) // Устанавливает новую точку отсчета времени
+            .putInt("count_system", 0)
+            .putInt("count_pulse", 0)
+            .putInt("count_sms", 0)
+            .putInt("count_logic", 0)
+            .apply()
+    }
+
+    // Функция мониторинга возможности выполнить вызов для нахождения точки установки репитера
+    fun checkCallStateSequence() {
+        // На всякий случай отменяем предыдущий запуск, если он был
+        monitorJob?.cancel()
+
+        // Запускаем в индивидуальную корутину
+        monitorJob = scope.launch {
+            mainRepository.speakText("Поиск точки расположения репитера. Попытки выполнить вызов будут выполняться непрерывно")
+            delay(11000)
+
+            flagSimMonitor = true
+            var currentSim = 0
+
+            while (flagSimMonitor) {
+                mainRepository.setInput(monitorNumber)
+                mainRepository.setSim(currentSim)
+                delay(500)
+                DtmfService.callStart(context)
+
+                for (i in 1..durationSeconds * 10) { // Опрос состояний
+                    if (!flagSimMonitor) break
+                    val currentState = mainRepository.getCallState()
+                    callStates.add(currentState)
+                    if (callStates.size >= 2) {
+                        val lastIndex = callStates.size - 1
+                        if (callStates[lastIndex - 1] == 1 && (callStates[lastIndex] == 7 || callStates[lastIndex] == 4)) break
+                    }
+                    delay(100)
+                }
+
+                var isSuccess = false
+                for (i in 0 until callStates.size - 1) {
+                    if (callStates[i] == 9 && callStates[i + 1] == 1) {
+                        isSuccess = true
+                        break
+                    }
+                }
+                callStates.clear()
+
+                if (isSuccess) {
+                    if (mainRepository.getCall() != null) DtmfService.callEnd(context)
+                    delay(5000)
+                    if (flagSimMonitor) mainRepository.speakText("Попытка вызова с ${if (currentSim == 0) "первой" else "второй"} сим карты выполнена успешно")
+                } else {
+                    if (mainRepository.getCall() != null) DtmfService.callEnd(context)
+                    if (flagSimMonitor) mainRepository.speakText("Попытка вызова с ${if (currentSim == 0) "первой" else "второй"} сим карты не удалась, переместитесь в другое место, здесь нет сигнала базовой станции")
+                }
+
+                mainRepository.setInput("")
+                currentSim = if (currentSim == 0) 1 else 0
+
+                // Если флаг уже сброшен, не ждем 40 секунд, а выходим сразу
+                if (!flagSimMonitor) break
+
+                delay(40000)
+            }
+        }
+    }
+
+    // Функции для подмены значений частот для двойного частотомера
+    fun substituteFrequencyLow(frequency: Float): Float {
+        return when (frequency) {
+            703.125f -> 697.000f
+            765.625f -> 770.000f
+            859.375f -> 852.000f
+            937.500f -> 941.000f
+            else -> frequency
+        }
+    }
+
+    fun substituteFrequencyHigh(frequency: Float): Float {
+        return when (frequency) {
+            1203.125f -> 1209.000f
+            1328.125f -> 1336.000f
+            1343.750f -> 1336.000f
+            1484.375f -> 1477.000f
+            1640.625f -> 1633.000f
+            else -> frequency
+        }
+    }
+
+    // Функция для преобразования значения в текстовый формат
+    fun formatVolumeLevel(volume: Double): String {
+        val formattedVolume = String.format("%.2f", volume)
+        return formattedVolume.replace(".", " ")
     }
 }

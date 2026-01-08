@@ -46,7 +46,7 @@ class MainScreen : Screen {
                                     val volumePercent = (screenState.volumeLevelCtcss * 1000).toInt()
                                     "CTCSS ${screenState.frequencyCtcss} Гц ${volumePercent}%"
                                 }
-                                screenState.amplitudeCheck -> if (screenState.magneticFieldFlag) {
+                                screenState.amplitudeCheck -> if (screenState.flagDtmfMic) {
                                     "SUPER TEL" + " <${screenState.callState}> <${screenState.timer/1000}> <${screenState.micClickKeyCode}>"
                                 } else {
                                     "SUPER TEL" + " <${screenState.callState}> <НЦ> <${screenState.micClickKeyCode}>"
@@ -88,7 +88,7 @@ class MainScreen : Screen {
                             colors = CardDefaults.cardColors(
                                 containerColor = when {
                                     screenState.isRecording -> Color(0xFFE72929) // Красный, если идет запись голосовой заметки.
-                                    screenState.magneticField -> Color(0xFF1E88E5) // Синий, если есть магнитное поле = true (0xFF1E88E5 - глубокий синий)
+                                   // screenState.magneticField -> Color(0xFF1E88E5) // Синий, если есть магнитное поле = true (0xFF1E88E5 - глубокий синий)
                                     else -> Color(0xFFE0E0E0) // Светло-серый по умолчанию
                                 }
                             )

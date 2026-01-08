@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.hardware.camera2.CameraManager
+import android.location.Location
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
@@ -68,7 +69,6 @@ class MainRepositoryImpl(
     private var recognizerJob = scope
     private var flashlightJob = scope
     private var playSoundJob = scope
-    private var monitorJob: Job? = null
 
     private val _spectrum: MutableStateFlow<Spectrum?> = MutableStateFlow(null)
     private val _key: MutableStateFlow<Char?> = MutableStateFlow(null)
@@ -97,9 +97,8 @@ class MainRepositoryImpl(
     private val _micKeyClick: MutableStateFlow<Int?> = MutableStateFlow(null) // Значение нажатой кнопки гарнитуры
     private val _timer: MutableStateFlow<Long> = MutableStateFlow(0) // Значение основного таймера
     private val _isDTMFStarted: MutableStateFlow<Boolean> = MutableStateFlow(false) // включение DTMF
-    private val _magneticField: MutableStateFlow<Boolean?> = MutableStateFlow(null)
-    private val _magneticFieldFlag: MutableStateFlow<Boolean?> = MutableStateFlow(null)
     private val _flashlight: MutableStateFlow<Boolean?> = MutableStateFlow(null)
+    private val _flagDtmfMic: MutableStateFlow<Boolean?> = MutableStateFlow(null)
     private val _statusDtmf: MutableStateFlow<Boolean?> = MutableStateFlow(null)
 
     private val blockingQueue = LinkedBlockingQueue<DataBlock>()
@@ -115,7 +114,6 @@ class MainRepositoryImpl(
     private var amplitudeCtcssCorrect: Double = 0.02 // Корректирующее значения прибавляется к установленному уровню в момент поднятия трубки
     private var isTorchOnIs = 5 // Задано 5 чтобы исключить случайное срабатывание (Внимание открытый канал...)
     private var currentTorchState: Boolean? = null  // Текущее состояние вспышки для оптимизации (централизованное управление)
-    private var monitorNumber: String = "87057895564" // Номер по умолчанию для тестовых звонков для проверки сети
     private var voxActivation = 500L
     private var isBeaconActiveManually = false // Флаг работы маяка
 
@@ -142,7 +140,6 @@ class MainRepositoryImpl(
     private var isTorchOn = false
     private var flagVox = false
     private var flagAmplitude = false
-    private var flagSimMonitor = false
     private var flagFrequency = false
     private var flagDtmf = false
     private var flagFlashLight = false
@@ -151,7 +148,6 @@ class MainRepositoryImpl(
     private var isProgrammingMode = false
     private var lastKeyPressTime: Long = 0
     private var flagDoobleClic = 0
-    private var isCommandProcessed = false // Флаг для предотвращения двойного срабатывания по книге контактов и помощи
     private var durationVox = 50L // Длительность активирующего тона для отладки платы VOX
     private var periodVox = 1600L // Длительность периода следования тонов для отладки платы VOX
     private var ton = 0
@@ -159,24 +155,10 @@ class MainRepositoryImpl(
     private var block = false
     private var subscribersNumber = 0
     private val subscribers = mutableSetOf<Char>() // Список количества абонентов для селективного вызова
-    private val callStates = mutableListOf<Int>() // Список изменений вызова для мониторинга точки установки репитера
-    private val durationSeconds = 30000 // Время в течении которого происходит попытка дозвона для мониторинга
     private var isStopRecordingTriggered = false
 
-    private var isContactMode = false // Флаг, который показывает, находимся ли мы в режиме просмотра контактов
-    private var contacts: List<Pair<String, String>> = emptyList() // Список контактов (имя и номер)
-    private var currentContactIndex = -1 // Индекс текущего просматриваемого контакта
-    private var previousContactsSize = 0 // Предыдущий размер списка контактов для отслеживания изменений
-
-    private var isHelpMode = false // Флаг, который показывает, находимся ли мы в режиме просмотра основных команд
-    private var isHelpMode1 = false // Флаг, который показывает, находимся ли мы в режиме просмотра помощи
-    private var isSmsMode = false // Флаг, который показывает, находимся ли мы в режиме просмотра сообщений
-    private var sentences = emptyList<String>() // Список всех предложений помощи
-    private var currentSentenceIndex = 0 // Индекс текущего просматриваемого предложения
-
-    private var smsNavigationIndex: Int = -1 // -1 означает, что навигация не активна, 0 — самое новое SMS.
-    private var totalSmsCount: Int = 0      // Общее количество SMS, для проверки границ.
     private var lastStartTime: Long = 0 // Время последнего реального старта DTMF
+
 
     // Локальный список предложений помощи (команды репитера)
     private fun getHelpSentences(): List<String> {
@@ -193,12 +175,21 @@ class MainRepositoryImpl(
             "PTT плюс два решетка, Маяк, отключение PTT плюс два нуля решетка.",
             "PTT плюс три звездочка, Уровни сети обеих сим карт.",
             "PTT плюс три решетка, Запуск мониторинга есть ли сеть, работает со сбоями.",
-            "PTT плюс четыре звездочка, Вход в книгу сообщений с пролистыванием с выбранным шагом. В этом режиме PTT плюс ноль, удалить все сообщения, PTT плюс четыре, прослушать текущее сообщение, PTT плюс пять, удаление текущего сооющения, PTT плюс звездочка, выход из режима, PTT плюс решетка, выход из режима.",
+            "PTT плюс четыре звездочка, Вход в книгу сообщений с пролистыванием с выбранным шагом. В этом режиме " +
+                    "PTT плюс ноль, удалить все сообщения, PTT плюс четыре, прослушать текущее сообщение, PTT плюс пять, удаление текущего сооющения, PTT плюс звездочка, выход из режима,.",
             "PTT плюс четыре решетка, Команда не назначена.",
             "PTT плюс пять звездочка, Голосовой поиск абонента в контактах с последующим вызовом, при наличии интернета.",
             "PTT плюс пять решетка, Голосовой поиск абонента в контактах с последующим удалением, при наличии интернета.",
-            "PTT плюс шесть звездочка, Вход в книгу контактов с пролистыванием с выбранным шагом. В этом режиме PTT плюс четыре, прослушать номер, PTT плюс пять, удаление выбранного контакта, PTT плюс звездочка, позвонить, PTT плюс решетка, выход из режима.",
-            "PTT плюс шесть решетка, Определение расстояния от абонента до репитера.",
+            "PTT плюс шесть звездочка, Вход в книгу контактов с пролистыванием с выбранным шагом. В этом режиме PTT плюс" +
+                    " четыре, прослушать номер, PTT плюс пять, удаление выбранного контакта, PTT плюс звездочка, " +
+                    "позвонить, PTT плюс звездочка, звонок с выбранного номера. PTT плюс решетка, выход из режима.",
+            "PTT плюс шесть решетка, Определение расстояния от абонента до репитера. В этом режиме PTT плюс ноль," +
+                    " сброс модуля, PTT плюс один, координаты репитера, PTT плюс два, азимут на репитер, PTT плюс три," +
+                    " высота репитера, PTT плюс четыре, повтор основного расчета, PTT плюс четыре, повтор основного " +
+                    "расчета, PTT плюс четыре, повтор основного расчета, PTT плюс пять, основной расчет," +
+                    "PTT плюс шесть, точность , PTT плюс семь проверка правильности ввода координат, " +
+                    "PTT плюс восемь, не назначено, PTT плюс девять, инструкция по вводу, PTT плюс звездочка ничего не делаем, " +
+                    "PTT плюс решетка, выход из режима.",
             "PTT плюс семь звездочка, Создание голосовых заметок.",
             "PTT плюс семь решетка, Включение управления вспышкой нажатием PTT, Отключение PTT плюс решетка.",
             "PTT плюс восемь звездочка, Вход в раздел помощи к описанию команд с прослушиванием предложений с выбранным шагом, PTT плюс решетка выход из режима.",
@@ -433,7 +424,7 @@ class MainRepositoryImpl(
             _input.update { "${durationVox}ms ${getVolumeLevelTts().toInt()}%" }
         } else {
                 _input.update { value }
-                if (getMagneticFieldFlag()) setTimer(30000) // продление таймера от любой команды
+                if (getFlagDtmfMic() == true) setTimer(30000) // продление таймера от любой команды
         }
     }
 
@@ -475,48 +466,6 @@ class MainRepositoryImpl(
         _input2.update { value }
     }
 
-    override fun getMagneticFieldFlow(): Flow<Boolean> = flow {
-        if (_magneticField.value == null) {
-            try {
-                getMagneticField()
-            } catch (ex: Exception) {
-                ex.printStackTrace()
-            }
-        }
-        emitAll(_magneticField.filterNotNull())
-    }
-
-    override fun getMagneticField(): Boolean {
-        return _magneticField.value ?: false
-    }
-
-    override fun setMagneticField(value: Boolean) {
-        // Централизованное управление вспышкой через setFlashlight
-        if (flagFlashLight) {
-            setFlashlight(value)
-        }
-        _magneticField.update { value }
-    }
-
-    override fun getMagneticFieldFlagFlow(): Flow<Boolean> = flow {
-        if (_magneticFieldFlag.value == null) {
-            try {
-                getMagneticFieldFlag()
-            } catch (ex: Exception) {
-                ex.printStackTrace()
-            }
-        }
-        emitAll(_magneticFieldFlag.filterNotNull())
-    }
-
-    override fun getMagneticFieldFlag(): Boolean {
-        return _magneticFieldFlag.value ?: false
-    }
-
-    override fun setMagneticFieldFlag(value: Boolean) {
-        _magneticFieldFlag.update { value }
-    }
-
     override fun getFlashlightFlow(): Flow<Boolean> = flow {
         if (_flashlight.value == null) {
             try {
@@ -545,6 +494,25 @@ class MainRepositoryImpl(
             }
         }
         _flashlight.update { value }
+    }
+
+    override fun getFlagDtmfMicFlow(): Flow<Boolean> = flow {
+        if (_flagDtmfMic.value == null) {
+            try {
+                getFlagDtmfMic()
+            } catch (ex: Exception) {
+                ex.printStackTrace()
+            }
+        }
+        emitAll(_flagDtmfMic.filterNotNull())
+    }
+
+    override fun getFlagDtmfMic(): Boolean? {
+        return _flagDtmfMic.value
+    }
+
+    override fun setFlagDtmfMic(value: Boolean) {
+        _flagDtmfMic.update { value }
     }
 
     override fun getStatusDtmfFlow(): Flow<Boolean> = flow {
@@ -862,7 +830,7 @@ class MainRepositoryImpl(
 
     override fun setOutputFrequencyLow(outputFrequencyLow: Float) {
         // Используем функцию подмены
-        val frequencyToUpdate = substituteFrequencyLow(outputFrequencyLow)
+        val frequencyToUpdate = utils.substituteFrequencyLow(outputFrequencyLow)
         // Обновляем значение
         _outputFrequencyLow.update { frequencyToUpdate }
     }
@@ -885,7 +853,7 @@ class MainRepositoryImpl(
 
     override fun setOutputFrequencyHigh(outputFrequencyHigh: Float) {
         // Используем функцию подмены
-        val frequencyToUpdate = substituteFrequencyHigh(outputFrequencyHigh)
+        val frequencyToUpdate = utils.substituteFrequencyHigh(outputFrequencyHigh)
         // Обновляем значение
         _outputFrequencyHigh.update { frequencyToUpdate }
     }
@@ -1135,8 +1103,6 @@ class MainRepositoryImpl(
             setInput("")
         }
 
-        isCommandProcessed = false
-
         if (key != ' ' && key != previousKey) {
 
             if (flagDtmf && !dtmfPlaying) {
@@ -1175,25 +1141,24 @@ class MainRepositoryImpl(
                 }
             }
 
-            // Блок обработки шага листания книги контактов или предложений раздела помощи
-            if (isContactMode || isHelpMode || isHelpMode1 || isSmsMode) {
-                val delta: Int = when (key) {
-                    '1' -> -1    // Назад на 1
-                    '7' -> 1     // Вперед на 1
-                    '2' -> -10   // Назад на 10
-                    '8' -> 10    // Вперед на 10
-                    '3' -> -100  // Назад на 100
-                    '9' -> 100   // Вперед на 100
-
-                    '4' -> 0     // ПОВТОР (для СМС это 0)
-                    '5' -> 30    // УДАЛЕНИЕ ТЕКУЩЕГО (30)
-                    '0' -> 40    // УДАЛЕНИЕ ВСЕХ СМС (40)
-
-                    else -> 999  // Техническое значение для игнорирования других клавиш
+            // Блок обработки кнопок навигации и команд
+            if (utils.isContactMode || utils.isHelpMode || utils.isHelpMode1 || utils.isSmsMode || utils.isGpsMode) {
+                val commandId: Int = when (key) {
+                    '1' -> 1
+                    '2' -> 2
+                    '3' -> 3
+                    '4' -> 4
+                    '5' -> 5
+                    '6' -> 6
+                    '7' -> 7
+                    '8' -> 8
+                    '9' -> 9
+                    '0' -> 0
+                    else -> 999 // Игнорировать
                 }
 
-                if (delta != 999) {
-                    handleNavigationCommand(delta)
+                if (commandId != 999) {
+                    utils.handleNavigationCommand(commandId)
                 }
             }
 
@@ -1338,12 +1303,15 @@ class MainRepositoryImpl(
                 }
             }
 
-            else if (key == '*') {
 
-                isProgrammingMode = false // Выход из режима програмирования номеров быстрого набора
-                isContactMode = false // Выход из режима листания контактов
-                isSmsMode = false // Выход из режима листания контактов
-                isHelpMode = false // Выход из режима листания помощи
+            // Запрещаем использовать звездочку в крупных рабочих режимах
+            else if (key == '*' && (!utils.isHelpMode && !utils.isHelpMode1 && !utils.isSmsMode && !utils.isGpsMode)) {
+
+//                isProgrammingMode = false // Выход из режима програмирования номеров быстрого набора
+                  utils.isContactMode = false // Выход из режима листания контактов
+//                isSmsMode = false // Выход из режима листания контактов
+//                isHelpMode = false // Выход из режима листания помощи
+//                isGpsMode = false // Выход из режима навигации
 
                 // Функция, где обрабатываются одиночные/двойные клики:
                 if (flagDoobleClic in 0..2) {
@@ -1422,9 +1390,10 @@ class MainRepositoryImpl(
                         speakText("Сообщения отсутствуют.")
                         setInput("")
                     } else {
-                        isSmsMode = true
-                        totalSmsCount = count
-                        smsNavigationIndex = -1 // Ставим -1, чтобы при первом нажатии "7" (delta 1) стать на индекс 0
+                        // Устанавливаем значения переменных внутри объекта utils
+                        utils.isSmsMode = true
+                        utils.totalSmsCount = count
+                        utils.smsNavigationIndex = -1 // Ставим -1, чтобы при первом нажатии "4" стать на индекс 0
 
                         speakText("Вы зашли в книгу входящих сообщений. Для перемещения по списку сообщений, по одному, используйте 7 и 1. по 10 сообщений 8 и 2. по 100 сообщений 9 и 3")
                         setInput("")
@@ -1460,16 +1429,20 @@ class MainRepositoryImpl(
                 }
 
                 else if (input == "6") {
+                    if (!utils.isContactMode) {
+                        // Загружаем только если список еще пуст
+                        if (utils.contacts.isEmpty()) {
+                            utils.contacts = utils.loadContacts(context)
+                        }
 
-                    if (!isContactMode) {
-                        contacts = utils.loadContacts(context)
-                        if (contacts.isEmpty()) {
+                        if (utils.contacts.isEmpty()) {
                             speakText("В телефонной книге нет контактов.")
                             setInput("")
                         } else {
-                            isContactMode = true
-                            isHelpMode = false // Запрет на пролистывание помощи
-                            currentContactIndex = -1
+                            utils.isContactMode = true
+                            utils.isHelpMode = false
+                            utils.isSmsMode = false // Хорошей практикой будет сбросить и SMS режим тоже
+                            utils.currentContactIndex = -1
                             speakText("Вы зашли в книгу контактов. Для перемещения по списку контактов, по одному, используйте 7 и 1. по 10 контактов 8 и 2. по 100 контактов 9 и 3")
                             setInput("")
                         }
@@ -1485,19 +1458,19 @@ class MainRepositoryImpl(
 
                 // Пролиставание и прослушивание назначения основных команд по команде 8*
                 else if (input == "8" && getCall() == null) {
-                    if (!isHelpMode) {
+                    if (!utils.isHelpMode) {
                         // 1. Очищаем всё старое
-                        sentences = emptyList()
-                        currentSentenceIndex = 0
+                        utils.sentences = emptyList()
+                        utils.currentSentenceIndex = 0
 
                         // 2. Загружаем локальный список
-                        sentences = getHelpSentences()
-                        if (sentences.isEmpty()) {
+                        utils.sentences = getHelpSentences()
+                        if (utils.sentences.isEmpty()) {
                             speakText("Список команд пуст.")
                             setInput("")
                         } else {
-                            isHelpMode = true // Разрешение на пролистывание помоши
-                            currentSentenceIndex = -1  // Начинаем с начала списка команд
+                            utils.isHelpMode = true // Разрешение на пролистывание помоши
+                            utils.currentSentenceIndex = -1  // Начинаем с начала списка команд
                             speakText("Вы перешли к описанию основных команд репитера. Для перемещения по описанию, по одному предложению, используйте 7 и 1. по 10 предложений, 8 и 2. по 100 предложений, 9 и 3.")
                             setInput("")
                         }
@@ -1698,7 +1671,7 @@ class MainRepositoryImpl(
                                 val formattedValue = String.format("%.1f", inputValue / 10.0)
                                 val finalValue = formattedValue.replace(',', '.')
                                 setFrequencyCtcss(finalValue.toDouble())
-                                speakText("Частота субтона репитера установлена на ${formatVolumeLevel(getFrequencyCtcss())} герца. Громкость ${formatVolumeLevel(getVolumeLevelCtcss() * 1000)} процентов")
+                                speakText("Частота субтона репитера установлена на ${utils.formatVolumeLevel(getFrequencyCtcss())} герца. Громкость ${utils.formatVolumeLevel(getVolumeLevelCtcss() * 1000)} процентов")
                                 setInput("")
                             }
                         }
@@ -1739,7 +1712,7 @@ class MainRepositoryImpl(
                             if (volumeInputValue != null && volumeInputValue in 0..1000) {
                                 setVolumeLevelCtcss(volumeInputValue / 1000.0) // Преобразуем значение от 0-1000 в диапазон от 0.01 до 1
                                 speakText(
-                                    "Громкость субтона установлена на $volumeInputValue процентов. его частота ${formatVolumeLevel(getFrequencyCtcss())} герц")
+                                    "Громкость субтона установлена на $volumeInputValue процентов. его частота ${utils.formatVolumeLevel(getFrequencyCtcss())} герц")
                             } else {
                                 speakText("Ожидается значение от нуля до тысячи")
                             }
@@ -1817,17 +1790,17 @@ class MainRepositoryImpl(
                 }
 
                 // Переключение в режим экономии батареи
-//                else if (input == "100") {
-//                    if (getCall() == null && block) {
-//                        if (getStatusDtmf()) stopDtmf()
-//                        setMagneticFieldFlag(true)
-//                        speakText("Включена экономия заряда батареи, требуется кабель с магнитной катушкой, ДЭ ТЭ МЭ ЭФ распознавание будет запускаться от изменения магнитного поля")
-//                        setInput("")
-//                    } else {
-//                        speakText("Команда заблокирована")
-//                        setInput("")
-//                    }
-//                }
+                else if (input == "100") {
+                    if (getCall() == null && block) {
+                        if (getStatusDtmf()) stopDtmf()
+                        setFlagDtmfMic(true)
+                        speakText("Включен старт по кнопке гарнитуры, ДЭ ТЭ МЭ ЭФ распознавание будет запускаться от нажатия кнопки гарнитуры")
+                        setInput("")
+                    } else {
+                        speakText("Команда заблокирована")
+                        setInput("")
+                    }
+                }
 
                 // Переключение в двухканальный режим
                 else if (input == "123") {
@@ -1943,7 +1916,7 @@ class MainRepositoryImpl(
                     setInput1("")
                     if (phoneNumberMonitor?.length == 11) {
                         val numberMoni = utils.numberToText(phoneNumberMonitor)
-                        monitorNumber = phoneNumberMonitor
+                        utils.monitorNumber = phoneNumberMonitor
                         speakText("Номер $numberMoni установлен для попыток дозвонится при тестировании есть ли сеть")
                         setInput("")
                         setInput1("")
@@ -2103,13 +2076,13 @@ class MainRepositoryImpl(
 
                     // Статистика 000#
                     else if (input == "000" && getCall() == null) {
-                        val report = getSystemHealthStats()
+                        val report = utils.getSystemHealthStats()
                         speakText(report)
                     }
 
                     // Сброс статистики
                     else if (input == "123456789" && getCall() == null) {
-                        resetStats()
+                        utils.resetStats()
                         speakText("Статистика работы приложения очищена, отсчет начат с этого момента")
                     }
 
@@ -2173,7 +2146,8 @@ class MainRepositoryImpl(
 
                     // Мониторинг сигнала SIM-карт по команде 3#
                     else if (input == "3" && getCall() == null) {
-                        checkCallStateSequence()
+                        utils.flagSimMonitor = true
+                        utils.checkCallStateSequence()
                     }
 
                     // Команда 4# (Перейти к более старым)
@@ -2219,106 +2193,10 @@ class MainRepositoryImpl(
                     //
                     else if (input == "6") {
                         if (getCall() == null) {
-                            playSoundJob.launch {
-                                // ШАГ 0: Подготовка
-                                speakText("Вы зашли в режим определения расстояния от вашего местоположения до точки расположения репитера.")
-                                val location = utils.getCurrentLocation(context)
-                                delay(12000)
-
-                                if (location != null) {
-                                    val repeaterLat = location.latitude
-                                    val repeaterLon = location.longitude
-                                    val repeaterAlt = location.altitude
-                                    val accuracy = location.accuracy
-
-                                    // Проверка точности (перед координатами)
-                                    if (accuracy > 25) {
-                                        speakText("Внимание. Низкая точность координат репитера. Погрешность ${accuracy.toInt()} метров.")
-                                        delay(10000)
-                                    }
-
-                                    val latSpeech = formatCoordsForSpeech(repeaterLat)
-                                    val lonSpeech = formatCoordsForSpeech(repeaterLon)
-
-                                    speakText("Координаты репитера.")
-                                    delay(4000)
-                                    speakText("Широта: $latSpeech.")
-                                    delay(8000)
-                                    speakText("Долгота: $lonSpeech.")
-                                    delay(10000)
-
-                                    // ШАГ 1: Ввод широты абонентом
-                                    speakText("Введите вашу широту, в десятичных градусах. Обычно в навигаторах это первое значение, помечено буквой Эн, Норс, север. Ожидается от двух до восьми цифр.")
-                                    setInput("")
-                                    delay(30000)
-                                    val rawLat = getInput() ?: ""
-                                    val userLat = parseCoord(rawLat)
-
-                                    if (userLat != null) {
-                                        // ШАГ 2: Ввод долготы абонентом
-                                        speakText("Принято. Введите долготу. Второе значение, помечено буквой е, Ист, восток. Также до восьми цифр.")
-                                        setInput("")
-                                        delay(30000)
-                                        val rawLon = getInput() ?: ""
-                                        val userLon = parseCoord(rawLon)
-
-                                        if (userLon != null) {
-                                            // НОВОЕ: Ввод высоты абонентом
-                                            speakText("Принято. Введите вашу высоту над уровнем моря. Четыре цифры.")
-                                            setInput("")
-                                            delay(20000)
-                                            val rawAlt = getInput() ?: ""
-                                            val userAlt = rawAlt.filter { it.isDigit() }.toDoubleOrNull() ?: 0.0
-
-                                            // РАСЧЕТЫ (Используем точные методы)
-                                            val d = utils.calculateDistance(repeaterLat, repeaterLon, userLat, userLon)
-                                            val km = d.toInt()
-                                            val m = ((d - km) * 1000).toInt()
-
-                                            val azimuth = utils.calculateAzimuth(userLat, userLon, repeaterLat, repeaterLon)
-                                            val azInt = azimuth.toInt()
-
-                                            // Определение направления по азимуту
-                                            val direction = when (azInt) {
-                                                in 0..22, in 338..360 -> "Север"
-                                                in 23..67 -> "Северо-Восток"
-                                                in 68..112 -> "Восток"
-                                                in 113..157 -> "Юго-Восток"
-                                                in 158..202 -> "Юг"
-                                                in 203..247 -> "Юго-Запад"
-                                                in 248..292 -> "Запад"
-                                                in 293..337 -> "Северо-Запад"
-                                                else -> ""
-                                            }
-
-                                            // Сравнение высот
-                                            val altDiff = (userAlt - repeaterAlt).toInt()
-                                            val heightText = if (altDiff > 0) {
-                                                "Вы находитесь выше репитера на ${Math.abs(altDiff)} метров."
-                                            } else if (altDiff < 0) {
-                                                "Вы находитесь ниже репитера на ${Math.abs(altDiff)} метров."
-                                            } else {
-                                                "Вы находитесь на одной высоте с репитером."
-                                            }
-
-                                            val textKm = if (km > 0) "$km километров " else ""
-                                            val textM = if (m > 0) "$m метров" else ""
-
-                                            // ФИНАЛЬНЫЙ ОТЧЕТ
-                                            speakText("Расстояние от вашего местоположения до репитера составляет $textKm$textM. " +
-                                                    "Азимут $azInt градусов. Направление на репитер — $direction. $heightText")
-
-                                        } else {
-                                            speakText("Ошибка ввода долготы. Выход из режима")
-                                        }
-                                    } else {
-                                        speakText("Ошибка ввода широты. Выход из режима")
-                                    }
-                                } else {
-                                    speakText("Ошибка джи. пи. эс. Координаты репитера не определены. Выход из режима")
-                                }
-                                setInput("")
-                            }
+                            utils.isGpsMode = true
+                            utils.startGpsSoft(context)
+                            speakText("Вы зашли в режим определения расстояния между вашим местоположением и точкой расположения репитера. " +
+                                    "Используйте цифры от 1 до 9 для работы. Цифра 0 перезапуск модуля навигации.")
                         }
                     }
 
@@ -2329,22 +2207,20 @@ class MainRepositoryImpl(
                         setInput("")
                     }
 
-                    // Пролиставание и прослушивание помощи по команде 8#
+                    // Пролистывание и прослушивание помощи по команде 8#
                     else if (input == "8" && getCall() == null) {
                         if (block) {
-                            if (!isHelpMode1) {
-                                // 1. Очищаем всё старое
-                                sentences = emptyList()
-                                currentSentenceIndex = 0
-
-                                // 2. Загружаем весь файл помощи
-                                sentences = utils.loadSentencesFromHtml(context)
-                                if (sentences.isEmpty()) {
+                            if (!utils.isHelpMode1) {
+                                utils.sentences = emptyList()
+                                utils.currentSentenceIndex = 0
+                                utils.sentences = utils.loadSentencesFromHtml(context)
+                                if (utils.sentences.isEmpty()) {
                                     speakText("Список помощи пуст.")
                                     setInput("")
                                 } else {
-                                    isHelpMode1 = true // Разрешение на пролистывание помоши
-                                    currentSentenceIndex = -1  // Начинаем с начала описания
+                                    // 3. Устанавливаем флаги в объекте utils
+                                    utils.isHelpMode1 = true // Разрешение на пролистывание помощи
+                                    utils.currentSentenceIndex = -1  // Начинаем с начала описания
                                     speakText("Вы зашли в полный раздел описания функциональности репитера. Для перемещения по описанию, по одному предложению, используйте 7 и 1. по 10 предложений, 8 и 2. по 100 предложений, 9 и 3.")
                                     setInput("")
                                 }
@@ -2418,17 +2294,17 @@ class MainRepositoryImpl(
                     }
 
                     // Отключение режима экономии батареи
-//                    else if (input == "100") {
-//                        if (getCall() == null && block) {
-//                            if (!getStatusDtmf()) startDtmf()
-//                            setMagneticFieldFlag(false)
-//                            speakText("Отключена экономия заряда батареи, ДЭ ТЭ МЭ ЭФ распознавание работает в непрерывном цикле")
-//                            setInput("")
-//                        } else {
-//                            speakText("Команда заблокирована")
-//                            setInput("")
-//                        }
-//                    }
+                    else if (input == "100") {
+                        if (getCall() == null && block) {
+                            if (!getStatusDtmf()) startDtmf()
+                            setFlagDtmfMic(false)
+                            speakText("Отключен старт по кнопке гарнитуры, ДЭ ТЭ МЭ ЭФ распознавание работает в непрерывном цикле")
+                            setInput("")
+                        } else {
+                            speakText("Команда заблокирована")
+                            setInput("")
+                        }
+                    }
 
                     // Откат двухканального режима (возврат к одноканальному)
                     else if (input == "123" && getCall() == null) {
@@ -2465,8 +2341,8 @@ class MainRepositoryImpl(
                             utils.stopRecording(isTorchOnIs, subscribers, pruning)
                         } else {
                             when {
-                                isContactMode -> {
-                                    isContactMode = false
+                                utils.isContactMode -> {
+                                    utils.isContactMode = false
                                     setInput("")
                                     speakText("Вы вышли из режима пролистывания контактов")
                                 }
@@ -2475,18 +2351,18 @@ class MainRepositoryImpl(
                                     setInput("")
                                     speakText("Вы вышли из режима программирования номеров быстрого набора")
                                 }
-                                isHelpMode -> {
-                                    isHelpMode = false
+                                utils.isHelpMode -> {
+                                    utils.isHelpMode = false
                                     setInput("")
                                     speakText("Вы вышли из режима пролиставания описания основных команд")
                                 }
-                                isHelpMode1 -> {
-                                    isHelpMode1 = false
+                                utils.isHelpMode1 -> {
+                                    utils.isHelpMode1 = false
                                     setInput("")
                                     speakText("Вы вышли из режима пролиставания основного раздела помощи")
                                 }
-                                isSmsMode -> {
-                                    isSmsMode = false
+                                utils.isSmsMode -> {
+                                    utils.isSmsMode = false
                                     setInput("")
                                     speakText("Вы вышли из режима пролистывания сообщений")
                                 }
@@ -2500,15 +2376,15 @@ class MainRepositoryImpl(
                                     setInput("")
                                     speakText("Режим измерения частоты отключен")
                                 }
-                                flagSimMonitor -> {
-                                    flagSimMonitor = false
-                                    monitorJob?.cancel()
-                                    monitorJob = null
+                                utils.flagSimMonitor -> {
+                                    utils.flagSimMonitor = false
+                                    utils.monitorJob?.cancel()
+                                    utils.monitorJob = null
                                     textToSpeech.stop()
                                     if (getCall() != null) {
                                         DtmfService.callEnd(context)
                                     }
-                                    callStates.clear()
+                                    utils.callStates.clear()
                                     setInput("")
                                     speakText("Мониторинг сети остановлен")
                                 }
@@ -2521,6 +2397,12 @@ class MainRepositoryImpl(
                                     flagDtmf = false
                                     setInput("")
                                     speakText("Генератор двухтональных команд отключен")
+                                }
+                                utils.isGpsMode -> {
+                                    utils.isGpsMode = false
+                                    utils.stopGps(context)
+                                    setInput("")
+                                    speakText("Вы вышли из режима навигации")
                                 }
                                 getFlagFrequencyLowHigt() -> {
                                     setFlagFrequencyLowHigt(false)
@@ -2539,7 +2421,7 @@ class MainRepositoryImpl(
                 }
             } else {
                 if (key != 'R' && key != 'S' && key != 'T' && key != 'V') {
-                    if (!isContactMode && !isHelpMode && !isHelpMode1 && !isSmsMode) { // Блокировка печати в режимах пролистывания контактов помощи и сообщений
+                    if (!utils.isContactMode && !utils.isHelpMode && !utils.isHelpMode1 && !utils.isSmsMode && !utils.isGpsMode) { // Блокировка печати в режимах пролистывания контактов помощи и сообщений
                         setInput(input + key)}
                 } else {
                     if (!isTorchOn) {
@@ -2634,7 +2516,7 @@ class MainRepositoryImpl(
             record()
         }
         recognizerJob.launch { recognize() }
-        if (getMagneticFieldFlag()) { setTimer(30000) }
+        if (getFlagDtmfMic() == true) { setTimer(30000) }
     }
 
     private fun initJob() {
@@ -2656,7 +2538,7 @@ class MainRepositoryImpl(
         blockingQueue.clear()
         recognizer.clear()
         DtmfService.stop(context)
-        if (getMagneticFieldFlag()) { setTimer(0) }
+        if (getFlagDtmfMic() == true) { setTimer(0) }
         setInput("")
     }
 
@@ -2688,406 +2570,16 @@ class MainRepositoryImpl(
         prefs.edit().putInt("count_system", current + 1).apply()
     }
 
-    private fun getSystemHealthStats(): String {
-        val prefs = context.getSharedPreferences("dtmf_stats", Context.MODE_PRIVATE)
-        val startTimeStr = prefs.getString("start_time", null) ?: return "Статистика пуста."
-
-        val countLogic = prefs.getInt("count_logic", 0)
-        val countSms = prefs.getInt("count_sms", 0)
-        val countSystem = prefs.getInt("count_system", 0)
-        val countPulse = prefs.getInt("count_pulse", 0)
-
-        val sdf = SimpleDateFormat("HH:mm dd.MM.yyyy", Locale.getDefault())
-        val startDate = try { sdf.parse(startTimeStr) } catch (e: Exception) { null } ?: return "Ошибка даты."
-
-        val diffMinutes = (System.currentTimeMillis() - startDate.time) / (1000 * 60)
-        val expectedPulsesByTime = diffMinutes / 30
-
-        val legalTriggers = countSms + countSystem + maxOf(countPulse.toLong(), expectedPulsesByTime)
-
-        // 1. Проверка на избыток (аномалии)
-        val anomalies = if (countLogic > (legalTriggers + 5)) countLogic - legalTriggers else 0L
-
-        // 2. Проверка на дефицит (засыпание)
-        val isPulseDeficit = diffMinutes > 40 && countPulse < (expectedPulsesByTime * 0.7)
-
-        // Формируем текст проблемы
-        var healthStatus = ""
-
-        // 1. Проверка на "левые" запуски
-        if (anomalies > 5) {
-            // Добавляем пробел в конце фразы
-            healthStatus = "Обнаружено $anomalies перезапусков не из ресиверов. "
-        }
-
-        // 2. Проверка таймера (добавляется к первой фразе, если она есть)
-        if (countPulse > (expectedPulsesByTime + 3)) {
-            healthStatus += "Внимание: таймер перезапуска срабатывает аномально часто."
-        } else if (isPulseDeficit) {
-            val missing = expectedPulsesByTime - countPulse
-            healthStatus += "Внимание: таймер перезапуска срабатывает аномально редко. Пропущено минимум $missing циклов."
-        }
-
-        // 3. Итоговый вывод
-        // Если обе проверки промолчали — всё хорошо.
-        val anomalyText = if (healthStatus.trim().isEmpty()) "Система стабильна." else healthStatus
-
-        // РАСЧЕТ ВРЕМЕНИ (Дни, Часы, Минуты)
-        val totalHours = diffMinutes / 60
-        val days = totalHours / 24
-        val hours = totalHours % 24
-        val mins = diffMinutes % 60
-
-        // Функция склонения дней
-        fun getDaysString(n: Long): String {
-            val lastDigit = n % 10
-            val lastTwoDigits = n % 100
-            return when {
-                lastTwoDigits in 11..19 -> "$n дней"
-                lastDigit == 1L -> "$n день"
-                lastDigit in 2..4 -> "$n дня"
-                else -> "$n дней"
-            }
-        }
-
-        val daysText = if (days > 0) "${getDaysString(days)} " else ""
-
-        return """
-    Статистика работы системы.
-    Старт произведен в $startTimeStr.
-    Время непрерывной работы: $daysText$hours ч. $mins мин.
-    Всего перезапусков: $countLogic.
-    Из них по таймеру перезапуска: $countPulse (ожидалось $expectedPulsesByTime).
-    по эс эм эс: $countSms.
-    Восстановлений системой: $countSystem.
-    $anomalyText
-""".trimIndent()
-    }
-
-    private fun resetStats() {
-        val prefs = context.getSharedPreferences("dtmf_stats", Context.MODE_PRIVATE)
-        val now = SimpleDateFormat("HH:mm dd.MM.yyyy", Locale.getDefault()).format(Date())
-
-        prefs.edit()
-            .clear() // Удаляет старые данные
-            .putString("start_time", now) // Устанавливает новую точку отсчета времени
-            .putInt("count_system", 0)
-            .putInt("count_pulse", 0)
-            .putInt("count_sms", 0)
-            .putInt("count_logic", 0)
-            .apply()
-    }
-
+    // Получение смс из ресивера и зачитывание его
     override fun handleIncomingSms(context: Context) {
-        // Делаем небольшую паузу (буквально 300-500мс),
-        // так как мы только что сами вставили запись в базу в SmsReceiver
         Handler(Looper.getMainLooper()).postDelayed({
-
-            // Используем твою готовую функцию, берем самый свежий индекс (0)
             val (smsText, count) = utils.getIncomingSmsByIndex(context, 0)
-
             if (count > 0) {
-                // smsText уже содержит "Сообщение номер 1 из... от... получено... Содержание..."
                 speakText("Внимание! $smsText")
             } else {
-                // Если вдруг база вернула 0, хотя ресивер сработал
                 speakText("Ошибка чтения базы данных сообщений")
             }
-
         }, 500)
-    }
-
-    // Функция мониторинга возможности выполнить вызов для нахождения точки установки репитера
-    private fun checkCallStateSequence() {
-        // На всякий случай отменяем предыдущий запуск, если он был
-        monitorJob?.cancel()
-
-        // Запускаем в индивидуальную корутину
-        monitorJob = scope.launch {
-            speakText("Поиск точки расположения репитера. Попытки выполнить вызов будут выполняться непрерывно")
-            delay(11000)
-
-            flagSimMonitor = true
-            var currentSim = 0
-
-            while (flagSimMonitor) {
-                setInput(monitorNumber)
-                setSim(currentSim)
-                delay(500)
-                DtmfService.callStart(context)
-
-                for (i in 1..durationSeconds * 10) { // Опрос состояний
-                    if (!flagSimMonitor) break
-                    val currentState = getCallState()
-                    callStates.add(currentState)
-                    if (callStates.size >= 2) {
-                        val lastIndex = callStates.size - 1
-                        if (callStates[lastIndex - 1] == 1 && (callStates[lastIndex] == 7 || callStates[lastIndex] == 4)) break
-                    }
-                    delay(100)
-                }
-
-                var isSuccess = false
-                for (i in 0 until callStates.size - 1) {
-                    if (callStates[i] == 9 && callStates[i + 1] == 1) {
-                        isSuccess = true
-                        break
-                    }
-                }
-                callStates.clear()
-
-                if (isSuccess) {
-                    if (getCall() != null) DtmfService.callEnd(context)
-                    delay(5000)
-                    if (flagSimMonitor) speakText("Попытка вызова с ${if (currentSim == 0) "первой" else "второй"} сим карты выполнена успешно")
-                } else {
-                    if (getCall() != null) DtmfService.callEnd(context)
-                    if (flagSimMonitor) speakText("Попытка вызова с ${if (currentSim == 0) "первой" else "второй"} сим карты не удалась, переместитесь в другое место, здесь нет сигнала базовой станции")
-                }
-
-                setInput("")
-                currentSim = if (currentSim == 0) 1 else 0
-
-                // Если флаг уже сброшен, не ждем 40 секунд, а выходим сразу
-                if (!flagSimMonitor) break
-
-                delay(40000)
-            }
-        }
-    }
-
-
-    private fun handleNavigationCommand(delta: Int) {
-        // --- 1. ЛОГИКА РЕЖИМА SMS ---
-        if (isSmsMode) {
-
-            // 1. ПОВТОР (Кнопка 4 -> delta 0)
-            // Должна стоять ПЕРВОЙ, чтобы исключить ложные срабатывания
-            if (delta == 0) {
-                if (smsNavigationIndex != -1 && totalSmsCount > 0) {
-                    val (smsText, _) = utils.getIncomingSmsByIndex(context, smsNavigationIndex)
-                    speakText(smsText)
-                } else if (smsNavigationIndex == -1) {
-                    speakText("Сначала выберите сообщение кнопками один или семь.")
-                    setInput("")
-                }
-                isCommandProcessed = true
-                return
-            }
-
-            // 2. УДАЛЕНИЕ ВСЕХ (Кнопка 0 -> delta 40)
-            if (delta == 40) {
-                if (smsNavigationIndex != -1) {
-                    utils.deleteAllSms(context)
-                    isSmsMode = false
-                    smsNavigationIndex = -1
-                } else {
-                    speakText("Сначала выберите сообщение.")
-                    setInput("")
-                }
-                isCommandProcessed = true
-                return
-            }
-
-            // 3. УДАЛЕНИЕ ТЕКУЩЕГО (Кнопка 5 -> delta 30)
-            if (delta == 30) {
-                if (smsNavigationIndex != -1 && totalSmsCount > 0) {
-                    val isDeleted = utils.deleteSmsByIndex(context, smsNavigationIndex)
-                    if (isDeleted) {
-                        speakText("Текущее сообщение было удалено.")
-                        setInput("")
-                        val (_, newCount) = utils.getIncomingSmsByIndex(context, 0)
-                        totalSmsCount = newCount
-
-                        if (totalSmsCount == 0) {
-                            isSmsMode = false
-                            smsNavigationIndex = -1
-                            speakText("Сообщений больше нет.")
-                            setInput("")
-                        } else if (smsNavigationIndex >= totalSmsCount) {
-                            smsNavigationIndex = totalSmsCount - 1
-                        }
-                    } else {
-                        speakText("Ошибка удаления.")
-                        setInput("")
-                    }
-                } else {
-                    speakText("Сначала выберите сообщение.")
-                    setInput("")
-                }
-                isCommandProcessed = true
-                return
-            }
-
-            // 4. НАВИГАЦИЯ (7, 1, 8, 2, 9, 3)
-            // Сюда попадем только если delta НЕ равна 0, 30 или 40
-            if (totalSmsCount <= 0) {
-                speakText("Сообщения отсутствуют.")
-                setInput("")
-                isSmsMode = false
-                return
-            }
-
-            if (smsNavigationIndex == -1) {
-                smsNavigationIndex = 0 // Инициализация при первом нажатии навигации
-            } else {
-                val nextIndex = smsNavigationIndex + delta
-
-                if (nextIndex < 0) {
-                    speakText("Выше по списку сообщений нет. Это самое новое.")
-                    setInput("")
-                    isCommandProcessed = true
-                    return
-                } else if (nextIndex >= totalSmsCount) {
-                    speakText("Ниже по списку сообщений нет. Это самое старое.")
-                    setInput("")
-                    isCommandProcessed = true
-                    return
-                }
-                smsNavigationIndex = nextIndex
-            }
-
-            val (smsText, _) = utils.getIncomingSmsByIndex(context, smsNavigationIndex)
-            speakText(smsText)
-            isCommandProcessed = true
-            return
-        }
-
-        // --- 2. ЛОГИКА РЕЖИМА КОНТАКТОВ ---
-        else if (isContactMode) {
-            // Навигация по контактам (delta != 0, 30, 40)
-            if (delta != 0 && delta != 30 && delta != 40) {
-                val currentContactsSize = contacts.size
-                if (currentContactsSize == 0) return
-
-                val wasContactDeleted = (previousContactsSize > 0 && currentContactsSize == previousContactsSize - 1)
-                currentContactIndex = (currentContactIndex + delta) % contacts.size
-
-                if (currentContactIndex < 0) {
-                    currentContactIndex += contacts.size
-                }
-
-                val actualIndex = if (wasContactDeleted && delta > 0) {
-                    if (currentContactIndex > 0) currentContactIndex - 1 else 0
-                } else {
-                    currentContactIndex
-                }
-
-                val contact = contacts[actualIndex]
-                speakText(contact.first)
-                isCommandProcessed = true
-
-                if (contact.second.length > 11) {
-                    speakText("Выбранный номер не помещается в стандартное поле")
-                    setInput("")
-                } else {
-                    setInput(contact.second)
-                }
-                previousContactsSize = currentContactsSize
-            }
-
-            // Озвучка номера контакта (delta 0)
-            else if (delta == 0) {
-                if (getInput() != "") {
-                    speakText(utils.numberToText(getInput().toString()))
-                } else {
-                    speakText("Нет выбранного контакта")
-                    setInput("")
-                }
-                isCommandProcessed = true
-            }
-
-            // Удаление контакта (delta 30)
-            else if (delta == 30) {
-                val currentInput = getInput()
-                if (currentInput.isNullOrEmpty()) {
-                    speakText("Для удаления контакта сначала выберите его из списка")
-                } else if (currentContactIndex >= 0 && currentContactIndex < contacts.size) {
-                    val contactName = contacts[currentContactIndex].first
-                    if (utils.deleteContactByName(contactName, context)) {
-                        speakText("Контакт $contactName успешно удален")
-                        previousContactsSize = contacts.size
-                        contacts = contacts.filterNot { it.first == contactName }
-                        if (contacts.isEmpty()) {
-                            isContactMode = false
-                        }
-                        setInput("")
-                    }
-                }
-                isCommandProcessed = true
-            }
-        }
-
-        // --- 3. ЛОГИКА РЕЖИМА ПОМОЩИ ---
-        else if ((isHelpMode || isHelpMode1) && delta != 999) {
-            currentSentenceIndex = (currentSentenceIndex + delta) % sentences.size
-            if (currentSentenceIndex < 0) {
-                currentSentenceIndex += sentences.size
-            }
-            if (currentSentenceIndex >= 0 && currentSentenceIndex < sentences.size) {
-                speakText(sentences[currentSentenceIndex])
-                isCommandProcessed = true
-                setInput("")
-            }
-        }
-    }
-
-    // Функции для подмены значений частот для двойного частотомера
-    private fun substituteFrequencyLow(frequency: Float): Float {
-        return when (frequency) {
-            703.125f -> 697.000f
-            765.625f -> 770.000f
-            859.375f -> 852.000f
-            937.500f -> 941.000f
-            else -> frequency
-        }
-    }
-
-    private fun substituteFrequencyHigh(frequency: Float): Float {
-        return when (frequency) {
-            1203.125f -> 1209.000f
-            1328.125f -> 1336.000f
-            1343.750f -> 1336.000f
-            1484.375f -> 1477.000f
-            1640.625f -> 1633.000f
-            else -> frequency
-        }
-    }
-
-    private fun formatCoordsForSpeech(coord: Double): String {
-        val s = String.format("%.6f", coord).replace(",", ".") // Гарантируем формат 00.000000
-        val parts = s.split(".")
-        val degrees = parts[0] // Целое (например, 42)
-        val decimals = parts[1] // Дробь (например, 341700)
-
-        // Разбиваем дробную часть на два блока по 3 цифры
-        val block1 = decimals.substring(0, 3)
-        val block2 = decimals.substring(3, 6)
-
-        return "$degrees. запятая. $block1. $block2."
-    }
-
-    // Универсальный парсер: первые 2 цифры - градусы, остальное - хвост
-    private fun parseCoord(raw: String): Double? {
-        val clean = raw.filter { it.isDigit() } // Убираем лишнее, если попало
-        if (clean.length < 2) return null
-
-        return try {
-            // Ограничиваем ввод 8 цифрами для стабильности
-            val limited = if (clean.length > 8) clean.substring(0, 8) else clean
-
-            // Ставим точку строго после второй цифры
-            val formatted = limited.substring(0, 2) + "." + limited.substring(2)
-            formatted.toDouble()
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    // Функция для преобразования значения в текстовый формат
-    private fun formatVolumeLevel(volume: Double): String {
-        val formattedVolume = String.format("%.2f", volume)
-        return formattedVolume.replace(".", " ")
     }
 
     // Основная функция озвучивания входящих вызовов
@@ -3107,7 +2599,6 @@ class MainRepositoryImpl(
                 }
                 speakText(message)
                 delay(17000)
-
             }
         }
     }

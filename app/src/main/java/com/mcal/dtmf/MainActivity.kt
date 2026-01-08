@@ -373,6 +373,15 @@ class MainActivity : ComponentActivity() {
             permissionsToRequest.add(Manifest.permission.ACCESS_FINE_LOCATION)
         }
 
+        // НОВОЕ: Разрешение на выполнение спец-команд (сброс GPS)
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACCESS_LOCATION_EXTRA_COMMANDS
+            ) == PackageManager.PERMISSION_DENIED
+        ) {
+            permissionsToRequest.add(Manifest.permission.ACCESS_LOCATION_EXTRA_COMMANDS)
+        }
+
         if (ContextCompat.checkSelfPermission(
                 this,
                 Manifest.permission.ACCESS_COARSE_LOCATION
